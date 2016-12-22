@@ -17,17 +17,17 @@ package http
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"net/http"
 	"strconv"
 
-	"github.com/cayleygraph/cayley/clog"
 	"github.com/julienschmidt/httprouter"
 
+	"github.com/cayleygraph/cayley/clog"
+	"github.com/cayleygraph/cayley/graph"
 	"github.com/cayleygraph/cayley/internal"
 	"github.com/cayleygraph/cayley/quad"
-	"github.com/cayleygraph/cayley/quad/cquads"
+	"github.com/cayleygraph/cayley/quad/nquads"
 )
 
 func ParseJSONToQuadList(jsonBody []byte) (out []quad.Quad, _ error) {
@@ -73,8 +73,9 @@ func (api *API) ServeV1Write(w http.ResponseWriter, r *http.Request, _ httproute
 	if err != nil {
 		return jsonResponse(w, 400, err)
 	}
-
-	h.QuadWriter.AddQuadSet(quads)
+	if err = h.QuadWriter.AddQuadSet(quads); err != nil {
+		return jsonResponse(w, 400, err)
+	}
 	fmt.Fprintf(w, "{\"result\": \"Successfully wrote %d quads.\"}", len(quads))
 	return 200
 }
@@ -91,43 +92,25 @@ func (api *API) ServeV1WriteNQuad(w http.ResponseWriter, r *http.Request, params
 	}
 	defer formFile.Close()
 
-	blockSize, blockErr := strconv.ParseInt(r.URL.Query().Get("block_size"), 10, 64)
+	blockSize, blockErr := strconv.Atoi(r.URL.Query().Get("block_size"))
 	if blockErr != nil {
-		blockSize = int64(api.config.LoadSize)
+		blockSize = api.config.LoadSize
 	}
 
 	quadReader, err := internal.Decompressor(formFile)
 	// TODO(kortschak) Make this configurable from the web UI.
-	dec := cquads.NewDecoder(quadReader)
+	dec := nquads.NewReader(quadReader, false)
 
 	h, err := api.GetHandleForRequest(r)
 	if err != nil {
 		return jsonResponse(w, 400, err)
 	}
-
-	var (
-		n     int
-		block = make([]quad.Quad, 0, blockSize)
-	)
-	for {
-		t, err := dec.Unmarshal()
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			clog.Fatalf("what can do this here? %v", err) // FIXME(kortschak)
-		}
-		block = append(block, t)
-		n++
-		if len(block) == cap(block) {
-			h.QuadWriter.AddQuadSet(block)
-			block = block[:0]
-		}
+	n, err := quad.CopyBatch(graph.NewWriter(h), dec, blockSize)
+	if err != nil {
+		return jsonResponse(w, 400, err)
 	}
-	h.QuadWriter.AddQuadSet(block)
 
 	fmt.Fprintf(w, "{\"result\": \"Successfully wrote %d quads.\"}", n)
-
 	return 200
 }
 
@@ -147,11 +130,12 @@ func (api *API) ServeV1Delete(w http.ResponseWriter, r *http.Request, params htt
 	if err != nil {
 		return jsonResponse(w, 400, err)
 	}
-	count := 0
 	for _, q := range quads {
-		h.QuadWriter.RemoveQuad(q)
-		count++
+		err = h.QuadWriter.RemoveQuad(q)
+		if err != nil && !graph.IsQuadNotExist(err) {
+			return jsonResponse(w, 400, err)
+		}
 	}
-	fmt.Fprintf(w, "{\"result\": \"Successfully deleted %d quads.\"}", count)
+	fmt.Fprintf(w, "{\"result\": \"Successfully deleted %d quads.\"}", len(quads))
 	return 200
 }

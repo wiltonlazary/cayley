@@ -42,6 +42,14 @@ import (
 	_ "github.com/cayleygraph/cayley/graph/mongo"
 	_ "github.com/cayleygraph/cayley/graph/sql"
 
+	// Load all supported quad formats.
+	_ "github.com/cayleygraph/cayley/quad/gml"
+	_ "github.com/cayleygraph/cayley/quad/graphml"
+	_ "github.com/cayleygraph/cayley/quad/json"
+	_ "github.com/cayleygraph/cayley/quad/jsonld"
+	_ "github.com/cayleygraph/cayley/quad/nquads"
+	_ "github.com/cayleygraph/cayley/quad/pquads"
+
 	// Load writer registry
 	_ "github.com/cayleygraph/cayley/writer"
 
@@ -211,7 +219,7 @@ func main() {
 			if err != nil {
 				break
 			}
-			err = internal.Load(handle.QuadWriter, cfg, *quadFile, *quadType)
+			err = internal.Load(handle.QuadWriter, cfg.LoadSize, *quadFile, *quadType)
 			if err != nil {
 				break
 			}
@@ -223,7 +231,7 @@ func main() {
 		if err != nil {
 			break
 		}
-		err = internal.Load(handle.QuadWriter, cfg, *quadFile, *quadType)
+		err = internal.Load(handle.QuadWriter, cfg.LoadSize, *quadFile, *quadType)
 		if err != nil {
 			break
 		}
@@ -236,7 +244,7 @@ func main() {
 			break
 		}
 		if !graph.IsPersistent(cfg.DatabaseType) {
-			err = internal.Load(handle.QuadWriter, cfg, *quadFile, *quadType)
+			err = internal.Load(handle.QuadWriter, cfg.LoadSize, *quadFile, *quadType)
 			if err != nil {
 				break
 			}
@@ -261,7 +269,7 @@ func main() {
 			break
 		}
 		if !graph.IsPersistent(cfg.DatabaseType) {
-			err = internal.Load(handle.QuadWriter, cfg, "", *quadType)
+			err = internal.Load(handle.QuadWriter, cfg.LoadSize, "", *quadType)
 			if err != nil {
 				break
 			}
@@ -283,7 +291,7 @@ func main() {
 			break
 		}
 		if !graph.IsPersistent(cfg.DatabaseType) {
-			err = internal.Load(handle.QuadWriter, cfg, "", *quadType)
+			err = internal.Load(handle.QuadWriter, cfg.LoadSize, "", *quadType)
 			if err != nil {
 				break
 			}

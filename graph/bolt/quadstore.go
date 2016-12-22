@@ -27,6 +27,7 @@ import (
 	"github.com/cayleygraph/cayley/graph/iterator"
 	"github.com/cayleygraph/cayley/graph/proto"
 	"github.com/cayleygraph/cayley/quad"
+	"github.com/cayleygraph/cayley/quad/pquads"
 )
 
 func init() {
@@ -230,7 +231,7 @@ func deltaToProto(delta graph.Delta) proto.LogDelta {
 	newd.ID = uint64(delta.ID.Int())
 	newd.Action = int32(delta.Action)
 	newd.Timestamp = delta.Timestamp.UnixNano()
-	newd.Quad = proto.MakeQuad(delta.Quad)
+	newd.Quad = pquads.MakeQuad(delta.Quad)
 	return newd
 }
 
@@ -314,11 +315,9 @@ func (qs *QuadStore) buildQuadWrite(tx *bolt.Tx, q quad.Quad, id int64, isAdd bo
 	}
 
 	if isAdd && len(entry.History)%2 == 1 {
-		clog.Errorf("attempt to add existing quad %v: %#v", entry, q)
 		return graph.ErrQuadExists
 	}
 	if !isAdd && len(entry.History)%2 == 0 {
-		clog.Errorf("attempt to delete non-existent quad %v: %#v", entry, q)
 		return graph.ErrQuadNotExist
 	}
 
@@ -345,7 +344,7 @@ func (qs *QuadStore) buildQuadWrite(tx *bolt.Tx, q quad.Quad, id int64, isAdd bo
 
 func (qs *QuadStore) UpdateValueKeyBy(name quad.Value, amount int64, tx *bolt.Tx) error {
 	value := proto.NodeData{
-		Value: proto.MakeValue(name),
+		Value: pquads.MakeValue(name),
 		Size:  amount,
 	}
 	b := tx.Bucket(nodeBucket)
@@ -410,12 +409,13 @@ func (qs *QuadStore) WriteHorizonAndSize(tx *bolt.Tx) error {
 	return err
 }
 
-func (qs *QuadStore) Close() {
+func (qs *QuadStore) Close() error {
 	qs.db.Update(func(tx *bolt.Tx) error {
 		return qs.WriteHorizonAndSize(tx)
 	})
-	qs.db.Close()
+	err := qs.db.Close()
 	qs.open = false
+	return err
 }
 
 func (qs *QuadStore) Quad(k graph.Value) quad.Quad {
