@@ -30,9 +30,14 @@ package iterator
 // Can be seen as the dual of the HasA iterator.
 
 import (
+	"context"
+	"fmt"
+
 	"github.com/cayleygraph/cayley/graph"
 	"github.com/cayleygraph/cayley/quad"
 )
+
+var _ graph.Iterator = &LinksTo{}
 
 // A LinksTo has a reference back to the graph.QuadStore (to create the iterators
 // for each node) the subiterator, and the direction the iterator comes from.
@@ -80,6 +85,7 @@ func (it *LinksTo) Tagger() *graph.Tagger {
 func (it *LinksTo) Clone() graph.Iterator {
 	out := NewLinksTo(it.qs, it.primaryIt.Clone(), it.dir)
 	out.tags.CopyFrom(it)
+	out.runstats.Size, out.runstats.ExactSize = it.runstats.Size, it.runstats.ExactSize
 	return out
 }
 
@@ -88,34 +94,22 @@ func (it *LinksTo) Direction() quad.Direction { return it.dir }
 
 // Tag these results, and our subiterator's results.
 func (it *LinksTo) TagResults(dst map[string]graph.Value) {
-	for _, tag := range it.tags.Tags() {
-		dst[tag] = it.Result()
-	}
-
-	for tag, value := range it.tags.Fixed() {
-		dst[tag] = value
-	}
+	it.tags.TagResult(dst, it.Result())
 
 	it.primaryIt.TagResults(dst)
 }
 
-func (it *LinksTo) Describe() graph.Description {
-	primary := it.primaryIt.Describe()
-	return graph.Description{
-		UID:       it.UID(),
-		Type:      it.Type(),
-		Direction: it.dir,
-		Iterator:  &primary,
-	}
+func (it *LinksTo) String() string {
+	return fmt.Sprintf("LinksTo(%v)", it.dir)
 }
 
 // If it checks in the right direction for the subiterator, it is a valid link
 // for the LinksTo.
-func (it *LinksTo) Contains(val graph.Value) bool {
+func (it *LinksTo) Contains(ctx context.Context, val graph.Value) bool {
 	graph.ContainsLogIn(it, val)
 	it.runstats.Contains += 1
 	node := it.qs.QuadDirection(val, it.dir)
-	if it.primaryIt.Contains(node) {
+	if it.primaryIt.Contains(ctx, node) {
 		it.result = val
 		return graph.ContainsLogOut(it, val, true)
 	}
@@ -150,34 +144,35 @@ func (it *LinksTo) Optimize() (graph.Iterator, bool) {
 }
 
 // Next()ing a LinksTo operates as described above.
-func (it *LinksTo) Next() bool {
-	graph.NextLogIn(it)
-	it.runstats.Next += 1
-	if it.nextIt.Next() {
-		it.runstats.ContainsNext += 1
-		it.result = it.nextIt.Result()
-		return graph.NextLogOut(it, true)
+func (it *LinksTo) Next(ctx context.Context) bool {
+	for {
+		graph.NextLogIn(it)
+		it.runstats.Next += 1
+		if it.nextIt.Next(ctx) {
+			it.runstats.ContainsNext += 1
+			it.result = it.nextIt.Result()
+			return graph.NextLogOut(it, true)
+		}
+
+		// If there's an error in the 'next' iterator, we save it and we're done.
+		it.err = it.nextIt.Err()
+		if it.err != nil {
+			return false
+		}
+
+		// Subiterator is empty, get another one
+		if !it.primaryIt.Next(ctx) {
+			// Possibly save error
+			it.err = it.primaryIt.Err()
+
+			// We're out of nodes in our subiterator, so we're done as well.
+			return graph.NextLogOut(it, false)
+		}
+		it.nextIt.Close()
+		it.nextIt = it.qs.QuadIterator(it.dir, it.primaryIt.Result())
+
+		// Continue -- return the first in the next set.
 	}
-
-	// If there's an error in the 'next' iterator, we save it and we're done.
-	it.err = it.nextIt.Err()
-	if it.err != nil {
-		return false
-	}
-
-	// Subiterator is empty, get another one
-	if !it.primaryIt.Next() {
-		// Possibly save error
-		it.err = it.primaryIt.Err()
-
-		// We're out of nodes in our subiterator, so we're done as well.
-		return graph.NextLogOut(it, false)
-	}
-	it.nextIt.Close()
-	it.nextIt = it.qs.QuadIterator(it.dir, it.primaryIt.Result())
-
-	// Recurse -- return the first in the next set.
-	return it.Next()
 }
 
 func (it *LinksTo) Err() error {
@@ -202,8 +197,8 @@ func (it *LinksTo) Close() error {
 }
 
 // We won't ever have a new result, but our subiterators might.
-func (it *LinksTo) NextPath() bool {
-	ok := it.primaryIt.NextPath()
+func (it *LinksTo) NextPath(ctx context.Context) bool {
+	ok := it.primaryIt.NextPath(ctx)
 	if !ok {
 		it.err = it.primaryIt.Err()
 	}
@@ -217,23 +212,43 @@ func (it *LinksTo) Type() graph.Type { return graph.LinksTo }
 func (it *LinksTo) Stats() graph.IteratorStats {
 	subitStats := it.primaryIt.Stats()
 	// TODO(barakmich): These should really come from the quadstore itself
-	fanoutFactor := int64(20)
 	checkConstant := int64(1)
 	nextConstant := int64(2)
-	return graph.IteratorStats{
+	st := graph.IteratorStats{
 		NextCost:     nextConstant + subitStats.NextCost,
 		ContainsCost: checkConstant + subitStats.ContainsCost,
-		Size:         fanoutFactor * subitStats.Size,
-		ExactSize:    false,
 		Next:         it.runstats.Next,
 		Contains:     it.runstats.Contains,
 		ContainsNext: it.runstats.ContainsNext,
 	}
+	st.Size, st.ExactSize = it.Size()
+	return st
 }
 
 func (it *LinksTo) Size() (int64, bool) {
-	st := it.Stats()
-	return st.Size, st.ExactSize
+	if it.runstats.Size != 0 {
+		return it.runstats.Size, it.runstats.ExactSize
+	}
+	if fixed, ok := it.primaryIt.(*Fixed); ok {
+		// get real sizes from sub iterators
+		var (
+			sz    int64
+			exact = true
+		)
+		for _, v := range fixed.Values() {
+			sit := it.qs.QuadIterator(it.dir, v)
+			n, ex := sit.Size()
+			sit.Close()
+			sz += n
+			exact = exact && ex
+		}
+		it.runstats.Size, it.runstats.ExactSize = sz, exact
+		return sz, exact
+	}
+	// TODO(barakmich): It should really come from the quadstore itself
+	const fanoutFactor = 20
+	sz, _ := it.primaryIt.Size()
+	sz *= fanoutFactor
+	it.runstats.Size, it.runstats.ExactSize = sz, false
+	return sz, false
 }
-
-var _ graph.Iterator = &LinksTo{}

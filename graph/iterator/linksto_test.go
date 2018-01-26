@@ -12,28 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package iterator
+package iterator_test
 
 import (
+	"context"
 	"testing"
 
+	"github.com/cayleygraph/cayley/graph/graphmock"
+	. "github.com/cayleygraph/cayley/graph/iterator"
 	"github.com/cayleygraph/cayley/quad"
 )
 
 func TestLinksTo(t *testing.T) {
-	qs := &store{
-		data: []string{1: "cool"},
-		iter: NewFixed(Identity),
+	ctx := context.TODO()
+	qs := &graphmock.Oldstore{
+		Data: []string{1: "cool"},
+		Iter: NewFixed(),
 	}
-	qs.iter.(*Fixed).Add(Int64Quad(2))
-	fixed := NewFixed(Identity)
+	qs.Iter.(*Fixed).Add(Int64Quad(2))
+	fixed := NewFixed()
 	val := qs.ValueOf(quad.Raw("cool"))
 	if val.(Int64Node) != 1 {
 		t.Fatalf("Failed to return correct value, got:%v expect:1", val)
 	}
 	fixed.Add(val)
 	lto := NewLinksTo(qs, fixed, quad.Object)
-	if !lto.Next() {
+	if !lto.Next(ctx) {
 		t.Error("At least one quad matches the fixed object")
 	}
 	val = lto.Result()

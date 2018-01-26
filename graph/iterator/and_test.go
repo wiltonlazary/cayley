@@ -12,22 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package iterator
+package iterator_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	"github.com/cayleygraph/cayley/graph"
+	"github.com/cayleygraph/cayley/graph/graphmock"
+	. "github.com/cayleygraph/cayley/graph/iterator"
 )
 
 // Make sure that tags work on the And.
 func TestTag(t *testing.T) {
-	qs := &store{
-		data: []string{},
-		iter: NewFixed(Identity),
+	ctx := context.TODO()
+	qs := &graphmock.Oldstore{
+		Data: []string{},
+		Iter: NewFixed(),
 	}
-	fix1 := NewFixed(Identity, Int64Node(234))
+	fix1 := NewFixed(Int64Node(234))
 	fix1.Tagger().Add("foo")
 	and := NewAnd(qs, fix1)
 	and.Tagger().Add("bar")
@@ -39,7 +43,7 @@ func TestTag(t *testing.T) {
 		t.Errorf("Cannot get tag back, got %s", out[0])
 	}
 
-	if !and.Next() {
+	if !and.Next(ctx) {
 		t.Errorf("And did not next")
 	}
 	val := and.Result()
@@ -58,17 +62,18 @@ func TestTag(t *testing.T) {
 
 // Do a simple itersection of fixed values.
 func TestAndAndFixedIterators(t *testing.T) {
-	qs := &store{
-		data: []string{},
-		iter: NewFixed(Identity),
+	ctx := context.TODO()
+	qs := &graphmock.Oldstore{
+		Data: []string{},
+		Iter: NewFixed(),
 	}
-	fix1 := NewFixed(Identity,
+	fix1 := NewFixed(
 		Int64Node(1),
 		Int64Node(2),
 		Int64Node(3),
 		Int64Node(4),
 	)
-	fix2 := NewFixed(Identity,
+	fix2 := NewFixed(
 		Int64Node(3),
 		Int64Node(4),
 		Int64Node(5),
@@ -83,15 +88,15 @@ func TestAndAndFixedIterators(t *testing.T) {
 		t.Error("not accurate")
 	}
 
-	if !and.Next() || and.Result().(Int64Node) != 3 {
+	if !and.Next(ctx) || and.Result().(Int64Node) != 3 {
 		t.Error("Incorrect first value")
 	}
 
-	if !and.Next() || and.Result().(Int64Node) != 4 {
+	if !and.Next(ctx) || and.Result().(Int64Node) != 4 {
 		t.Error("Incorrect second value")
 	}
 
-	if and.Next() {
+	if and.Next(ctx) {
 		t.Error("Too many values")
 	}
 
@@ -100,17 +105,18 @@ func TestAndAndFixedIterators(t *testing.T) {
 // If there's no intersection, the size should still report the same,
 // but there should be nothing to Next()
 func TestNonOverlappingFixedIterators(t *testing.T) {
-	qs := &store{
-		data: []string{},
-		iter: NewFixed(Identity),
+	ctx := context.TODO()
+	qs := &graphmock.Oldstore{
+		Data: []string{},
+		Iter: NewFixed(),
 	}
-	fix1 := NewFixed(Identity,
+	fix1 := NewFixed(
 		Int64Node(1),
 		Int64Node(2),
 		Int64Node(3),
 		Int64Node(4),
 	)
-	fix2 := NewFixed(Identity,
+	fix2 := NewFixed(
 		Int64Node(5),
 		Int64Node(6),
 		Int64Node(7),
@@ -125,38 +131,40 @@ func TestNonOverlappingFixedIterators(t *testing.T) {
 		t.Error("not accurate")
 	}
 
-	if and.Next() {
+	if and.Next(ctx) {
 		t.Error("Too many values")
 	}
 
 }
 
 func TestAllIterators(t *testing.T) {
-	qs := &store{
-		data: []string{},
-		iter: NewFixed(Identity),
+	ctx := context.TODO()
+	qs := &graphmock.Oldstore{
+		Data: []string{},
+		Iter: NewFixed(),
 	}
 	all1 := NewInt64(1, 5, true)
 	all2 := NewInt64(4, 10, true)
 	and := NewAnd(qs, all2, all1)
 
-	if !and.Next() || and.Result().(Int64Node) != Int64Node(4) {
+	if !and.Next(ctx) || and.Result().(Int64Node) != Int64Node(4) {
 		t.Error("Incorrect first value")
 	}
 
-	if !and.Next() || and.Result().(Int64Node) != Int64Node(5) {
+	if !and.Next(ctx) || and.Result().(Int64Node) != Int64Node(5) {
 		t.Error("Incorrect second value")
 	}
 
-	if and.Next() {
+	if and.Next(ctx) {
 		t.Error("Too many values")
 	}
 }
 
 func TestAndIteratorErr(t *testing.T) {
-	qs := &store{
-		data: []string{},
-		iter: NewFixed(Identity),
+	ctx := context.TODO()
+	qs := &graphmock.Oldstore{
+		Data: []string{},
+		Iter: NewFixed(),
 	}
 	wantErr := errors.New("unique")
 	allErr := newTestIterator(false, wantErr)
@@ -166,7 +174,7 @@ func TestAndIteratorErr(t *testing.T) {
 		NewInt64(1, 5, true),
 	)
 
-	if and.Next() != false {
+	if and.Next(ctx) != false {
 		t.Errorf("And iterator did not pass through initial 'false'")
 	}
 	if and.Err() != wantErr {

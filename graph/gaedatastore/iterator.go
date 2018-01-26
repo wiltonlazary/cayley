@@ -15,13 +15,14 @@
 package gaedatastore
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/cayleygraph/cayley/clog"
 	"github.com/cayleygraph/cayley/graph"
 	"github.com/cayleygraph/cayley/graph/iterator"
 	"github.com/cayleygraph/cayley/quad"
 
-	"github.com/cayleygraph/cayley/clog"
 	"google.golang.org/appengine/datastore"
 )
 
@@ -141,7 +142,7 @@ func (it *Iterator) Close() error {
 func (it *Iterator) Tagger() *graph.Tagger {
 	return &it.tags
 }
-func (it *Iterator) Contains(v graph.Value) bool {
+func (it *Iterator) Contains(ctx context.Context, v graph.Value) bool {
 	graph.ContainsLogIn(it, v)
 	if it.isAll {
 		// The result needs to be set, so when contains is called, the result can be retrieved
@@ -177,12 +178,7 @@ func (it *Iterator) Contains(v graph.Value) bool {
 }
 
 func (it *Iterator) TagResults(dst map[string]graph.Value) {
-	for _, tag := range it.tags.Tags() {
-		dst[tag] = it.Result()
-	}
-	for tag, value := range it.tags.Fixed() {
-		dst[tag] = value
-	}
+	it.tags.TagResult(dst, it.Result())
 }
 
 func (it *Iterator) Clone() graph.Iterator {
@@ -199,7 +195,7 @@ func (it *Iterator) Clone() graph.Iterator {
 	return m
 }
 
-func (it *Iterator) NextPath() bool {
+func (it *Iterator) NextPath(ctx context.Context) bool {
 	return false
 }
 
@@ -212,7 +208,7 @@ func (it *Iterator) Result() graph.Value {
 	return it.result
 }
 
-func (it *Iterator) Next() bool {
+func (it *Iterator) Next(ctx context.Context) bool {
 	if it.offset+1 < len(it.buffer) {
 		it.offset++
 		it.result = &Token{Kind: it.kind, Hash: it.buffer[it.offset]}
@@ -294,31 +290,16 @@ func (it *Iterator) Size() (int64, bool) {
 	return it.size, true
 }
 
-var gaedatastoreType graph.Type
-
-func init() {
-	gaedatastoreType = graph.RegisterIterator("gaedatastore")
-}
-
-func Type() graph.Type { return gaedatastoreType }
 func (it *Iterator) Type() graph.Type {
 	if it.isAll {
 		return graph.All
 	}
-	return gaedatastoreType
+	return "gaedatastore"
 }
 func (it *Iterator) Sorted() bool                     { return false }
 func (it *Iterator) Optimize() (graph.Iterator, bool) { return it, false }
-func (it *Iterator) Describe() graph.Description {
-	size, _ := it.Size()
-	return graph.Description{
-		UID:       it.UID(),
-		Name:      fmt.Sprintf("%s/%s", it.name, it.hash),
-		Type:      it.Type(),
-		Size:      size,
-		Tags:      it.tags.Tags(),
-		Direction: it.dir,
-	}
+func (it *Iterator) String() string {
+	return fmt.Sprintf("GAE(%s/%s)", it.name, it.hash)
 }
 
 // TODO (panamafrancis) calculate costs

@@ -12,40 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package iterator
+package iterator_test
 
 import (
 	"reflect"
 	"testing"
 
 	"github.com/cayleygraph/cayley/graph"
+	"github.com/cayleygraph/cayley/graph/graphmock"
+	. "github.com/cayleygraph/cayley/graph/iterator"
 	"github.com/cayleygraph/cayley/quad"
 )
 
 func hasaWithTag(qs graph.QuadStore, tag string, target string) *HasA {
 	and := NewAnd(qs)
 
-	obj := qs.FixedIterator()
-	obj.Add(qs.ValueOf(quad.Raw(target)))
+	obj := NewFixed(qs.ValueOf(quad.Raw(target)))
 	obj.Tagger().Add(tag)
 	and.AddSubIterator(NewLinksTo(qs, obj, quad.Object))
 
-	pred := qs.FixedIterator()
-	pred.Add(qs.ValueOf(quad.Raw("status")))
+	pred := NewFixed(qs.ValueOf(quad.Raw("status")))
 	and.AddSubIterator(NewLinksTo(qs, pred, quad.Predicate))
 
 	return NewHasA(qs, and, quad.Subject)
 }
 
 func TestQueryShape(t *testing.T) {
-	qs := &store{
-		data: []string{
-			1: "cool",
-			2: "status",
-			3: "fun",
-			4: "name",
-		},
-	}
+	qs := &graphmock.Oldstore{Data: []string{
+		1: "cool",
+		2: "status",
+		3: "fun",
+		4: "name",
+	}}
 
 	// Given a single linkage iterator's shape.
 	hasa := hasaWithTag(qs, "tag", "cool")
@@ -101,8 +99,7 @@ func TestQueryShape(t *testing.T) {
 	hasa2.Tagger().Add("hasa2")
 	andInternal.AddSubIterator(hasa2)
 
-	pred := qs.FixedIterator()
-	pred.Add(qs.ValueOf(quad.Raw("name")))
+	pred := NewFixed(qs.ValueOf(quad.Raw("name")))
 
 	and := NewAnd(qs)
 	and.AddSubIterator(NewLinksTo(qs, andInternal, quad.Subject))

@@ -23,8 +23,13 @@ package iterator
 // the base iterators, and it helps just to see it here.
 
 import (
+	"context"
+	"fmt"
+
 	"github.com/cayleygraph/cayley/graph"
 )
+
+var _ graph.Iterator = &Int64{}
 
 // An All iterator across a range of int64 values, from `max` to `min`.
 type Int64 struct {
@@ -39,9 +44,13 @@ type Int64 struct {
 
 type Int64Node int64
 
+func (v Int64Node) Key() interface{} { return v }
+
 func (Int64Node) IsNode() bool { return true }
 
 type Int64Quad int64
+
+func (v Int64Quad) Key() interface{} { return v }
 
 func (Int64Quad) IsNode() bool { return false }
 
@@ -81,26 +90,16 @@ func (it *Int64) Tagger() *graph.Tagger {
 
 // Fill the map based on the tags assigned to this iterator.
 func (it *Int64) TagResults(dst map[string]graph.Value) {
-	for _, tag := range it.tags.Tags() {
-		dst[tag] = it.Result()
-	}
-
-	for tag, value := range it.tags.Fixed() {
-		dst[tag] = value
-	}
+	it.tags.TagResult(dst, it.Result())
 }
 
-func (it *Int64) Describe() graph.Description {
-	return graph.Description{
-		UID:  it.UID(),
-		Type: it.Type(),
-		Tags: it.tags.Tags(),
-	}
+func (it *Int64) String() string {
+	return fmt.Sprintf("Int64(%d-%d)", it.min, it.max)
 }
 
 // Next() on an Int64 all iterator is a simple incrementing counter.
 // Return the next integer, and mark it as the result.
-func (it *Int64) Next() bool {
+func (it *Int64) Next(ctx context.Context) bool {
 	graph.NextLogIn(it)
 	it.runstats.Next += 1
 	if it.at == -1 {
@@ -130,7 +129,7 @@ func (it *Int64) Result() graph.Value {
 	return it.toValue(it.result)
 }
 
-func (it *Int64) NextPath() bool {
+func (it *Int64) NextPath(ctx context.Context) bool {
 	return false
 }
 
@@ -142,21 +141,23 @@ func (it *Int64) SubIterators() []graph.Iterator {
 // The number of elements in an Int64 is the size of the range.
 // The size is exact.
 func (it *Int64) Size() (int64, bool) {
-	Size := ((it.max - it.min) + 1)
-	return Size, true
+	sz := (it.max - it.min) + 1
+	return sz, true
+}
+
+func valToInt64(v graph.Value) int64 {
+	if v, ok := v.(Int64Node); ok {
+		return int64(v)
+	}
+	return int64(v.(Int64Quad))
 }
 
 // Contains() for an Int64 is merely seeing if the passed value is
 // within the range, assuming the value is an int64.
-func (it *Int64) Contains(tsv graph.Value) bool {
+func (it *Int64) Contains(ctx context.Context, tsv graph.Value) bool {
 	graph.ContainsLogIn(it, tsv)
 	it.runstats.Contains += 1
-	var v int64
-	if tsv.IsNode() {
-		v = int64(tsv.(Int64Node))
-	} else {
-		v = int64(tsv.(Int64Quad))
-	}
+	v := valToInt64(tsv)
 	if it.min <= v && v <= it.max {
 		it.result = v
 		return graph.ContainsLogOut(it, it.toValue(v), true)
@@ -184,5 +185,3 @@ func (it *Int64) Stats() graph.IteratorStats {
 		Contains:     it.runstats.Contains,
 	}
 }
-
-var _ graph.Iterator = &Int64{}

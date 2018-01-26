@@ -12,14 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package iterator
+package iterator_test
 
 import (
+	"context"
 	"errors"
 	"testing"
+
+	. "github.com/cayleygraph/cayley/graph/iterator"
 )
 
 func TestMaterializeIteratorError(t *testing.T) {
+	ctx := context.TODO()
 	wantErr := errors.New("unique")
 	errIt := newTestIterator(false, wantErr)
 
@@ -27,7 +31,7 @@ func TestMaterializeIteratorError(t *testing.T) {
 	// underlying iterator returns an error.
 	mIt := NewMaterialize(errIt)
 
-	if mIt.Next() != false {
+	if mIt.Next(ctx) != false {
 		t.Errorf("Materialize iterator did not pass through underlying 'false'")
 	}
 	if mIt.Err() != wantErr {
@@ -36,6 +40,7 @@ func TestMaterializeIteratorError(t *testing.T) {
 }
 
 func TestMaterializeIteratorErrorAbort(t *testing.T) {
+	ctx := context.TODO()
 	wantErr := errors.New("unique")
 	errIt := newTestIterator(false, wantErr)
 
@@ -43,15 +48,15 @@ func TestMaterializeIteratorErrorAbort(t *testing.T) {
 	// underlying iterator is larger than our 'abort at' value, and then
 	// returns an error.
 	or := NewOr(
-		NewInt64(1, int64(abortMaterializeAt+1), true),
+		NewInt64(1, int64(MaterializeLimit+1), true),
 		errIt,
 	)
 
 	mIt := NewMaterialize(or)
 
 	// We should get all the underlying values...
-	for i := 0; i < abortMaterializeAt+1; i++ {
-		if !mIt.Next() {
+	for i := 0; i < MaterializeLimit+1; i++ {
+		if !mIt.Next(ctx) {
 			t.Errorf("Materialize iterator returned spurious 'false' on iteration %d", i)
 			return
 		}
@@ -62,7 +67,7 @@ func TestMaterializeIteratorErrorAbort(t *testing.T) {
 	}
 
 	// ... and then the error value.
-	if mIt.Next() != false {
+	if mIt.Next(ctx) != false {
 		t.Errorf("Materialize iterator did not pass through underlying 'false'")
 	}
 	if mIt.Err() != wantErr {

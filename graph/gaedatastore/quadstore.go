@@ -19,6 +19,7 @@ import (
 	"errors"
 	"math"
 	"net/http"
+	"time"
 
 	"github.com/cayleygraph/cayley/clog"
 
@@ -27,9 +28,11 @@ import (
 	"google.golang.org/appengine/datastore"
 
 	"github.com/cayleygraph/cayley/graph"
-	"github.com/cayleygraph/cayley/graph/iterator"
+	"github.com/cayleygraph/cayley/graph/http"
 	"github.com/cayleygraph/cayley/quad"
 )
+
+var _ httpgraph.QuadStore = (*QuadStore)(nil)
 
 const (
 	QuadStoreType = "gaedatastore"
@@ -56,16 +59,17 @@ type Token struct {
 	Hash string
 }
 
-func (t Token) IsNode() bool { return t.Kind == nodeKind }
+func (t Token) IsNode() bool     { return t.Kind == nodeKind }
+func (t Token) Key() interface{} { return t }
 
 type QuadEntry struct {
 	Hash      string
-	Added     []string `datastore:",noindex"`
-	Deleted   []string `datastore:",noindex"`
-	Subject   string   `datastore:"subject"`
-	Predicate string   `datastore:"predicate"`
-	Object    string   `datastore:"object"`
-	Label     string   `datastore:"label"`
+	Added     []int64 `datastore:",noindex"`
+	Deleted   []int64 `datastore:",noindex"`
+	Subject   string  `datastore:"subject"`
+	Predicate string  `datastore:"predicate"`
+	Object    string  `datastore:"object"`
+	Label     string  `datastore:"label"`
 }
 
 type NodeEntry struct {
@@ -74,7 +78,6 @@ type NodeEntry struct {
 }
 
 type LogEntry struct {
-	LogID     string
 	Action    string
 	Key       string
 	Timestamp int64
@@ -82,11 +85,10 @@ type LogEntry struct {
 
 func init() {
 	graph.RegisterQuadStore("gaedatastore", graph.QuadStoreRegistration{
-		NewFunc:           newQuadStore,
-		NewForRequestFunc: newQuadStoreForRequest,
-		UpgradeFunc:       nil,
-		InitFunc:          initQuadStore,
-		IsPersistent:      true,
+		NewFunc:      newQuadStore,
+		UpgradeFunc:  nil,
+		InitFunc:     initQuadStore,
+		IsPersistent: true,
 	})
 }
 
@@ -96,18 +98,7 @@ func initQuadStore(_ string, _ graph.Options) error {
 }
 
 func newQuadStore(_ string, options graph.Options) (graph.QuadStore, error) {
-	var qs QuadStore
-	return &qs, nil
-}
-
-func newQuadStoreForRequest(qs graph.QuadStore, options graph.Options) (graph.QuadStore, error) {
-	newQs, err := newQuadStore("", options)
-	if err != nil {
-		return nil, err
-	}
-	t := newQs.(*QuadStore)
-	t.context, err = getContext(options)
-	return newQs, err
+	return &QuadStore{}, nil
 }
 
 func (qs *QuadStore) createKeyForQuad(q quad.Quad) *datastore.Key {
@@ -131,8 +122,8 @@ func (qs *QuadStore) createKeyForMetadata() *datastore.Key {
 	return qs.createKeyFromToken(&Token{"metadata", "metadataentry"})
 }
 
-func (qs *QuadStore) createKeyForLog(deltaID graph.PrimaryKey) *datastore.Key {
-	return datastore.NewKey(qs.context, "logentry", deltaID.String(), 0, nil)
+func (qs *QuadStore) createKeyForLog() *datastore.Key {
+	return datastore.NewKey(qs.context, "logentry", "", 0, nil)
 }
 
 func (qs *QuadStore) createKeyFromToken(t *Token) *datastore.Key {
@@ -140,7 +131,7 @@ func (qs *QuadStore) createKeyFromToken(t *Token) *datastore.Key {
 }
 
 func (qs *QuadStore) checkValid(k *datastore.Key) (bool, error) {
-	var q quad.Quad
+	var q QuadEntry
 	err := datastore.Get(qs.context, k, &q)
 	if err == datastore.ErrNoSuchEntity {
 		return false, nil
@@ -151,6 +142,10 @@ func (qs *QuadStore) checkValid(k *datastore.Key) (bool, error) {
 	if err != nil {
 		clog.Warningf("Error occurred when getting quad/node %s %v", k, err)
 		return false, err
+	}
+	// a deleted node should not be returned as found.
+	if len(q.Deleted) >= len(q.Added) {
+		return false, nil
 	}
 	return true, nil
 }
@@ -163,6 +158,10 @@ func getContext(opts graph.Options) (context.Context, error) {
 		return nil, err
 	}
 	return appengine.NewContext(req), nil
+}
+
+func (qs *QuadStore) ForRequest(r *http.Request) (graph.QuadStore, error) {
+	return &QuadStore{context: appengine.NewContext(r)}, nil
 }
 
 func (qs *QuadStore) ApplyDeltas(in []graph.Delta, ignoreOpts graph.IgnoreOpts) error {
@@ -210,7 +209,7 @@ func (qs *QuadStore) ApplyDeltas(in []graph.Delta, ignoreOpts graph.IgnoreOpts) 
 	if len(toKeep) == 0 {
 		return nil
 	}
-	err := qs.updateLog(toKeep)
+	ids, err := qs.updateLog(toKeep)
 	if err != nil {
 		clog.Errorf("Updating log failed %v", err)
 		return err
@@ -220,7 +219,7 @@ func (qs *QuadStore) ApplyDeltas(in []graph.Delta, ignoreOpts graph.IgnoreOpts) 
 		clog.Infof("Existence verified. Proceeding.")
 	}
 
-	quadsAdded, err := qs.updateQuads(toKeep)
+	quadsAdded, err := qs.updateQuads(toKeep, ids)
 	if err != nil {
 		clog.Errorf("UpdateQuads failed %v", err)
 		return err
@@ -298,7 +297,7 @@ func (qs *QuadStore) updateNodes(in []graph.Delta) (int64, error) {
 	return nodesAdded, nil
 }
 
-func (qs *QuadStore) updateQuads(in []graph.Delta) (int64, error) {
+func (qs *QuadStore) updateQuads(in []graph.Delta, ids []int64) (int64, error) {
 	keys := make([]*datastore.Key, 0, len(in))
 	for _, d := range in {
 		keys = append(keys, qs.createKeyForQuad(d.Quad))
@@ -322,10 +321,10 @@ func (qs *QuadStore) updateQuads(in []graph.Delta) (int64, error) {
 
 				// If the quad exists the Added[] will be non-empty
 				if in[x].Action == graph.Add {
-					foundQuads[k].Added = append(foundQuads[k].Added, in[x].ID.String())
+					foundQuads[k].Added = append(foundQuads[k].Added, ids[x])
 					quadCount += 1
 				} else {
-					foundQuads[k].Deleted = append(foundQuads[k].Deleted, in[x].ID.String())
+					foundQuads[k].Deleted = append(foundQuads[k].Deleted, ids[x])
 					quadCount -= 1
 				}
 			}
@@ -359,13 +358,13 @@ func (qs *QuadStore) updateMetadata(quadsAdded int64, nodesAdded int64) error {
 	return err
 }
 
-func (qs *QuadStore) updateLog(in []graph.Delta) error {
+func (qs *QuadStore) updateLog(in []graph.Delta) ([]int64, error) {
 	if qs.context == nil {
 		err := errors.New("Error updating log, context is nil, graph not correctly initialised")
-		return err
+		return nil, err
 	}
 	if len(in) == 0 {
-		return errors.New("Nothing to log")
+		return nil, errors.New("Nothing to log")
 	}
 	logEntries := make([]LogEntry, 0, len(in))
 	logKeys := make([]*datastore.Key, 0, len(in))
@@ -378,20 +377,24 @@ func (qs *QuadStore) updateLog(in []graph.Delta) error {
 		}
 
 		entry := LogEntry{
-			LogID:     d.ID.String(),
 			Action:    action,
 			Key:       qs.createKeyForQuad(d.Quad).String(),
-			Timestamp: d.Timestamp.UnixNano(),
+			Timestamp: time.Now().UnixNano(),
 		}
 		logEntries = append(logEntries, entry)
-		logKeys = append(logKeys, qs.createKeyForLog(d.ID))
+		logKeys = append(logKeys, qs.createKeyForLog())
 	}
 
-	_, err := datastore.PutMulti(qs.context, logKeys, logEntries)
+	ids, err := datastore.PutMulti(qs.context, logKeys, logEntries)
 	if err != nil {
 		clog.Errorf("Error updating log: %v", err)
+		return nil, err
 	}
-	return err
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, id.IntID())
+	}
+	return out, nil
 }
 
 func (qs *QuadStore) QuadIterator(dir quad.Direction, v graph.Value) graph.Iterator {
@@ -458,11 +461,15 @@ func (qs *QuadStore) Quad(val graph.Value) quad.Quad {
 			clog.Errorf("Error: %v", err)
 		}
 	}
-	return quad.MakeRaw(
+	var label interface{}
+	if q.Label != "" {
+		label = q.Label
+	}
+	return quad.Make(
 		q.Subject,
 		q.Predicate,
 		q.Object,
-		q.Label,
+		label,
 	)
 }
 
@@ -496,34 +503,8 @@ func (qs *QuadStore) NodeSize() int64 {
 	return foundMetadata.NodeCount
 }
 
-func (qs *QuadStore) Horizon() graph.PrimaryKey {
-	if qs.context == nil {
-		clog.Warningf("Warning: HTTP Request context is nil, cannot get horizon from datastore.")
-		return graph.NewUniqueKey("")
-	}
-	// Query log for last entry...
-	q := datastore.NewQuery("logentry").Order("-Timestamp").Limit(1)
-	var logEntries []LogEntry
-	_, err := q.GetAll(qs.context, &logEntries)
-	if err != nil || len(logEntries) == 0 {
-		// Error fetching horizon, probably graph is empty
-		return graph.NewUniqueKey("")
-	}
-	return graph.NewUniqueKey(logEntries[0].LogID)
-}
-
-func compareTokens(a, b graph.Value) bool {
-	atok := a.(*Token)
-	btok := b.(*Token)
-	return atok.Kind == btok.Kind && atok.Hash == btok.Hash
-}
-
-func (qs *QuadStore) FixedIterator() graph.FixedIterator {
-	return iterator.NewFixed(compareTokens)
-}
-
 func (qs *QuadStore) OptimizeIterator(it graph.Iterator) (graph.Iterator, bool) {
-	return nil, false
+	return it, false
 }
 
 func (qs *QuadStore) Close() error {
@@ -554,8 +535,4 @@ func (qs *QuadStore) QuadDirection(val graph.Value, dir quad.Direction) graph.Va
 	}
 	sub := t.Hash[offset : offset+(quad.HashSize*2)]
 	return &Token{Kind: nodeKind, Hash: sub}
-}
-
-func (qs *QuadStore) Type() string {
-	return QuadStoreType
 }

@@ -15,11 +15,15 @@
 package iterator
 
 import (
+	"context"
+	"fmt"
 	"regexp"
 
 	"github.com/cayleygraph/cayley/graph"
 	"github.com/cayleygraph/cayley/quad"
 )
+
+var _ graph.Iterator = &Regex{}
 
 // Regex is a unary operator -- a filter across the values in the relevant
 // subiterator. It works similarly to gremlin's filter{it.matches('exp')},
@@ -66,8 +70,6 @@ func (it *Regex) testRegex(val graph.Value) bool {
 	// Type switch to avoid coercing and testing numeric types
 	v := it.qs.NameOf(val)
 	switch v := v.(type) {
-	case quad.Raw:
-		return it.re.MatchString(string(v))
 	case quad.String:
 		return it.re.MatchString(string(v))
 	case quad.TypedString:
@@ -109,8 +111,8 @@ func (it *Regex) Clone() graph.Iterator {
 	return out
 }
 
-func (it *Regex) Next() bool {
-	for it.subIt.Next() {
+func (it *Regex) Next(ctx context.Context) bool {
+	for it.subIt.Next(ctx) {
 		val := it.subIt.Result()
 		if it.testRegex(val) {
 			it.result = val
@@ -129,9 +131,9 @@ func (it *Regex) Result() graph.Value {
 	return it.result
 }
 
-func (it *Regex) NextPath() bool {
+func (it *Regex) NextPath(ctx context.Context) bool {
 	for {
-		hasNext := it.subIt.NextPath()
+		hasNext := it.subIt.NextPath(ctx)
 		if !hasNext {
 			it.err = it.subIt.Err()
 			return false
@@ -148,11 +150,11 @@ func (it *Regex) SubIterators() []graph.Iterator {
 	return []graph.Iterator{it.subIt}
 }
 
-func (it *Regex) Contains(val graph.Value) bool {
+func (it *Regex) Contains(ctx context.Context, val graph.Value) bool {
 	if !it.testRegex(val) {
 		return false
 	}
-	ok := it.subIt.Contains(val)
+	ok := it.subIt.Contains(ctx, val)
 	if !ok {
 		it.err = it.subIt.Err()
 	}
@@ -164,13 +166,8 @@ func (it *Regex) Type() graph.Type {
 	return graph.Regex
 }
 
-func (it *Regex) Describe() graph.Description {
-	primary := it.subIt.Describe()
-	return graph.Description{
-		UID:      it.UID(),
-		Type:     it.Type(),
-		Iterator: &primary,
-	}
+func (it *Regex) String() string {
+	return fmt.Sprintf("Regexp(%v)", it.re.String())
 }
 
 // There's nothing to optimize, locally, for a Regex iterator.
@@ -192,19 +189,12 @@ func (it *Regex) Stats() graph.IteratorStats {
 // If we failed the check, then the subiterator should not contribute to the result
 // set. Otherwise, go ahead and tag it.
 func (it *Regex) TagResults(dst map[string]graph.Value) {
-	for _, tag := range it.tags.Tags() {
-		dst[tag] = it.Result()
-	}
-
-	for tag, value := range it.tags.Fixed() {
-		dst[tag] = value
-	}
+	it.tags.TagResult(dst, it.Result())
 
 	it.subIt.TagResults(dst)
 }
 
 func (it *Regex) Size() (int64, bool) {
-	return 0, false
+	sz, _ := it.subIt.Size()
+	return sz / 2, false
 }
-
-var _ graph.Iterator = &Regex{}

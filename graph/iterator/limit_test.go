@@ -1,12 +1,16 @@
-package iterator
+package iterator_test
 
 import (
+	"context"
 	"reflect"
 	"testing"
+
+	. "github.com/cayleygraph/cayley/graph/iterator"
 )
 
 func TestLimitIteratorBasics(t *testing.T) {
-	allIt := NewFixed(Identity,
+	ctx := context.TODO()
+	allIt := NewFixed(
 		Int64Node(1),
 		Int64Node(2),
 		Int64Node(3),
@@ -37,7 +41,7 @@ func TestLimitIteratorBasics(t *testing.T) {
 	}
 
 	for _, v := range []int{1, 2, 3, 4, 5} {
-		if !u.Contains(Int64Node(v)) {
+		if !u.Contains(ctx, Int64Node(v)) {
 			t.Errorf("Failed to find a correct value in the Limit iterator.")
 		}
 	}

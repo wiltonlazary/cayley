@@ -16,8 +16,12 @@
 package iterator
 
 import (
+	"context"
+
 	"github.com/cayleygraph/cayley/graph"
 )
+
+var _ graph.Iterator = &And{}
 
 // The And iterator. Consists of a number of subiterators, the primary of which will
 // be Next()ed if next is called.
@@ -69,13 +73,7 @@ func (it *And) Tagger() *graph.Tagger {
 // An extended TagResults, as it needs to add it's own results and
 // recurse down it's subiterators.
 func (it *And) TagResults(dst map[string]graph.Value) {
-	for _, tag := range it.tags.Tags() {
-		dst[tag] = it.Result()
-	}
-
-	for tag, value := range it.tags.Fixed() {
-		dst[tag] = value
-	}
+	it.tags.TagResult(dst, it.Result())
 
 	if it.primaryIt != nil {
 		it.primaryIt.TagResults(dst)
@@ -100,25 +98,16 @@ func (it *And) Clone() graph.Iterator {
 
 // Returns a slice of the subiterators, in order (primary iterator first).
 func (it *And) SubIterators() []graph.Iterator {
-	iters := make([]graph.Iterator, len(it.internalIterators)+1)
-	iters[0] = it.primaryIt
-	copy(iters[1:], it.internalIterators)
+	iters := make([]graph.Iterator, 0, len(it.internalIterators)+1)
+	if it.primaryIt != nil {
+		iters = append(iters, it.primaryIt)
+	}
+	iters = append(iters, it.internalIterators...)
 	return iters
 }
 
-func (it *And) Describe() graph.Description {
-	subIts := make([]graph.Description, len(it.internalIterators))
-	for i, sub := range it.internalIterators {
-		subIts[i] = sub.Describe()
-	}
-	primary := it.primaryIt.Describe()
-	return graph.Description{
-		UID:       it.UID(),
-		Type:      it.Type(),
-		Tags:      it.tags.Tags(),
-		Iterator:  &primary,
-		Iterators: subIts,
-	}
+func (it *And) String() string {
+	return "And"
 }
 
 // Add a subiterator to this And iterator.
@@ -141,12 +130,12 @@ func (it *And) AddSubIterator(sub graph.Iterator) {
 // subiterators, it must choose one subiterator to produce a candidate, and check
 // this value against the subiterators. A productive choice of primary iterator
 // is therefore very important.
-func (it *And) Next() bool {
+func (it *And) Next(ctx context.Context) bool {
 	graph.NextLogIn(it)
 	it.runstats.Next += 1
-	for it.primaryIt.Next() {
+	for it.primaryIt.Next(ctx) {
 		curr := it.primaryIt.Result()
-		if it.subItsContain(curr, nil) {
+		if it.subItsContain(ctx, curr, nil) {
 			it.result = curr
 			return graph.NextLogOut(it, true)
 		}
@@ -156,7 +145,18 @@ func (it *And) Next() bool {
 }
 
 func (it *And) Err() error {
-	return it.err
+	if err := it.err; err != nil {
+		return err
+	}
+	if err := it.primaryIt.Err(); err != nil {
+		return err
+	}
+	for _, si := range it.internalIterators {
+		if err := si.Err(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (it *And) Result() graph.Value {
@@ -164,14 +164,14 @@ func (it *And) Result() graph.Value {
 }
 
 // Checks a value against the non-primary iterators, in order.
-func (it *And) subItsContain(val graph.Value, lastResult graph.Value) bool {
+func (it *And) subItsContain(ctx context.Context, val graph.Value, lastResult graph.Value) bool {
 	var subIsGood = true
 	for i, sub := range it.internalIterators {
-		subIsGood = sub.Contains(val)
+		subIsGood = sub.Contains(ctx, val)
 		if !subIsGood {
 			if lastResult != nil {
 				for j := 0; j < i; j++ {
-					it.internalIterators[j].Contains(lastResult)
+					it.internalIterators[j].Contains(ctx, lastResult)
 				}
 			}
 			break
@@ -180,10 +180,10 @@ func (it *And) subItsContain(val graph.Value, lastResult graph.Value) bool {
 	return subIsGood
 }
 
-func (it *And) checkContainsList(val graph.Value, lastResult graph.Value) bool {
+func (it *And) checkContainsList(ctx context.Context, val graph.Value, lastResult graph.Value) bool {
 	ok := true
 	for i, c := range it.checkList {
-		ok = c.Contains(val)
+		ok = c.Contains(ctx, val)
 		if !ok {
 			it.err = c.Err()
 			if it.err != nil {
@@ -199,7 +199,7 @@ func (it *And) checkContainsList(val graph.Value, lastResult graph.Value) bool {
 					// seeking back exactly one -- so we check all the prior iterators
 					// with the (already verified) result and throw away the result,
 					// which will be 'true'
-					it.checkList[j].Contains(lastResult)
+					it.checkList[j].Contains(ctx, lastResult)
 
 					it.err = it.checkList[j].Err()
 					if it.err != nil {
@@ -217,23 +217,23 @@ func (it *And) checkContainsList(val graph.Value, lastResult graph.Value) bool {
 }
 
 // Check a value against the entire iterator, in order.
-func (it *And) Contains(val graph.Value) bool {
+func (it *And) Contains(ctx context.Context, val graph.Value) bool {
 	graph.ContainsLogIn(it, val)
 	it.runstats.Contains += 1
 	lastResult := it.result
 	if it.checkList != nil {
-		return it.checkContainsList(val, lastResult)
+		return it.checkContainsList(ctx, val, lastResult)
 	}
-	mainGood := it.primaryIt.Contains(val)
+	mainGood := it.primaryIt.Contains(ctx, val)
 	if mainGood {
-		othersGood := it.subItsContain(val, lastResult)
+		othersGood := it.subItsContain(ctx, val, lastResult)
 		if othersGood {
 			it.result = val
 			return graph.ContainsLogOut(it, val, true)
 		}
 	}
 	if lastResult != nil {
-		it.primaryIt.Contains(lastResult)
+		it.primaryIt.Contains(ctx, lastResult)
 	}
 	return graph.ContainsLogOut(it, val, false)
 }
@@ -257,8 +257,8 @@ func (it *And) Size() (int64, bool) {
 // An And has no NextPath of its own -- that is, there are no other values
 // which satisfy our previous result that are not the result itself. Our
 // subiterators might, however, so just pass the call recursively.
-func (it *And) NextPath() bool {
-	if it.primaryIt.NextPath() {
+func (it *And) NextPath(ctx context.Context) bool {
+	if it.primaryIt.NextPath(ctx) {
 		return true
 	}
 	it.err = it.primaryIt.Err()
@@ -266,7 +266,7 @@ func (it *And) NextPath() bool {
 		return false
 	}
 	for _, sub := range it.internalIterators {
-		if sub.NextPath() {
+		if sub.NextPath(ctx) {
 			return true
 		}
 
@@ -301,5 +301,3 @@ func (it *And) Close() error {
 
 // Register this as an "and" iterator.
 func (it *And) Type() graph.Type { return graph.And }
-
-var _ graph.Iterator = &And{}

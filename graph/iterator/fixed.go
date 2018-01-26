@@ -21,11 +21,13 @@ package iterator
 // opaque Quad store value, may not answer to ==.
 
 import (
+	"context"
 	"fmt"
-	"sort"
 
 	"github.com/cayleygraph/cayley/graph"
 )
+
+var _ graph.Iterator = &Fixed{}
 
 // A Fixed iterator consists of it's values, an index (where it is in the process of Next()ing) and
 // an equality function.
@@ -34,24 +36,14 @@ type Fixed struct {
 	tags      graph.Tagger
 	values    []graph.Value
 	lastIndex int
-	cmp       Equality
 	result    graph.Value
 }
 
-// Define the signature of an equality function.
-type Equality func(a, b graph.Value) bool
-
-// Define an equality function of purely ==, which works for native types.
-func Identity(a, b graph.Value) bool {
-	return a == b
-}
-
 // Creates a new Fixed iterator with a custom comparator.
-func NewFixed(cmp Equality, vals ...graph.Value) *Fixed {
+func NewFixed(vals ...graph.Value) *Fixed {
 	it := &Fixed{
 		uid:    NextUID(),
 		values: make([]graph.Value, 0, 20),
-		cmp:    cmp,
 	}
 	for _, v := range vals {
 		it.Add(v)
@@ -76,19 +68,13 @@ func (it *Fixed) Tagger() *graph.Tagger {
 }
 
 func (it *Fixed) TagResults(dst map[string]graph.Value) {
-	for _, tag := range it.tags.Tags() {
-		dst[tag] = it.Result()
-	}
-
-	for tag, value := range it.tags.Fixed() {
-		dst[tag] = value
-	}
+	it.tags.TagResult(dst, it.Result())
 }
 
 func (it *Fixed) Clone() graph.Iterator {
 	vals := make([]graph.Value, len(it.values))
 	copy(vals, it.values)
-	out := NewFixed(it.cmp, vals...)
+	out := NewFixed(vals...)
 	out.tags.CopyFrom(it)
 	return out
 }
@@ -99,36 +85,27 @@ func (it *Fixed) Add(v graph.Value) {
 	it.values = append(it.values, v)
 }
 
-func (it *Fixed) Describe() graph.Description {
-	var value string
-	if len(it.values) > 0 {
-		value = fmt.Sprint(it.values[0])
-	}
-	fixed := make([]string, 0, len(it.tags.Fixed()))
-	for k := range it.tags.Fixed() {
-		fixed = append(fixed, k)
-	}
-	sort.Strings(fixed)
-	return graph.Description{
-		UID:  it.UID(),
-		Name: value,
-		Type: it.Type(),
-		Tags: fixed,
-		Size: int64(len(it.values)),
-	}
+// Values returns a list of values stored in iterator. Slice should not be modified.
+func (it *Fixed) Values() []graph.Value {
+	return it.values
+}
+
+func (it *Fixed) String() string {
+	return fmt.Sprintf("Fixed(%v)", it.values)
 }
 
 // Register this iterator as a Fixed iterator.
 func (it *Fixed) Type() graph.Type { return graph.Fixed }
 
 // Check if the passed value is equal to one of the values stored in the iterator.
-func (it *Fixed) Contains(v graph.Value) bool {
+func (it *Fixed) Contains(ctx context.Context, v graph.Value) bool {
 	// Could be optimized by keeping it sorted or using a better datastructure.
 	// However, for fixed iterators, which are by definition kind of tiny, this
 	// isn't a big issue.
 	graph.ContainsLogIn(it, v)
+	vk := graph.ToKey(v)
 	for _, x := range it.values {
-		if it.cmp(x, v) {
+		if graph.ToKey(x) == vk {
 			it.result = x
 			return graph.ContainsLogOut(it, v, true)
 		}
@@ -137,7 +114,7 @@ func (it *Fixed) Contains(v graph.Value) bool {
 }
 
 // Next advances the iterator.
-func (it *Fixed) Next() bool {
+func (it *Fixed) Next(ctx context.Context) bool {
 	graph.NextLogIn(it)
 	if it.lastIndex == len(it.values) {
 		return graph.NextLogOut(it, false)
@@ -156,7 +133,7 @@ func (it *Fixed) Result() graph.Value {
 	return it.result
 }
 
-func (it *Fixed) NextPath() bool {
+func (it *Fixed) NextPath(ctx context.Context) bool {
 	return false
 }
 
@@ -170,7 +147,7 @@ func (it *Fixed) SubIterators() []graph.Iterator {
 // optimization.
 func (it *Fixed) Optimize() (graph.Iterator, bool) {
 	if len(it.values) == 1 && it.values[0] == nil {
-		return &Null{}, true
+		return NewNull(), true
 	}
 
 	return it, false
@@ -192,5 +169,3 @@ func (it *Fixed) Stats() graph.IteratorStats {
 		ExactSize:    exact,
 	}
 }
-
-var _ graph.Iterator = &Fixed{}

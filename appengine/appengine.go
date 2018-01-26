@@ -22,24 +22,23 @@ import (
 	"time"
 
 	"github.com/cayleygraph/cayley/clog"
-
-	"github.com/cayleygraph/cayley/internal/config"
-	"github.com/cayleygraph/cayley/internal/db"
+	"github.com/cayleygraph/cayley/graph"
 	"github.com/cayleygraph/cayley/internal/http"
 
 	_ "github.com/cayleygraph/cayley/graph/gaedatastore"
 	_ "github.com/cayleygraph/cayley/writer"
 
 	// Register supported query languages
-	_ "github.com/cayleygraph/cayley/query/gremlin"
+	_ "github.com/cayleygraph/cayley/query/gizmo"
+	_ "github.com/cayleygraph/cayley/query/graphql"
 	_ "github.com/cayleygraph/cayley/query/mql"
 )
 
 var (
 	quadFile           = ""
-	quadType           = "cquad"
+	quadType           = "nquads"
 	cpuprofile         = ""
-	queryLanguage      = "gremlin"
+	queryLanguage      = "gizmo"
 	configFile         = ""
 	databasePath       = ""
 	databaseBackend    = "gaedatastore"
@@ -51,7 +50,7 @@ var (
 	timeout            = 30 * time.Second
 )
 
-func configFrom(file string) (*config.Config, error) {
+func configFrom(file string) (*Config, error) {
 	// Find the file...
 	if file != "" {
 		if _, err := os.Stat(file); os.IsNotExist(err) {
@@ -63,7 +62,7 @@ func configFrom(file string) (*config.Config, error) {
 	if file == "" {
 		clog.Infof("Couldn't find a config file appengine.cfg. Going by flag defaults only.")
 	}
-	cfg, err := config.Load(file)
+	cfg, err := LoadConf(file)
 	if err != nil {
 		return nil, err
 	}
@@ -101,15 +100,33 @@ func configFrom(file string) (*config.Config, error) {
 	return cfg, nil
 }
 
+func open(cfg *Config) (*graph.Handle, error) {
+	qs, err := graph.NewQuadStore(cfg.DatabaseType, cfg.DatabasePath, cfg.DatabaseOptions)
+	// override error to make it more informative
+	if os.IsNotExist(err) {
+		err = fmt.Errorf("file does not exist: %s. Please use with --init or run ./cayley init when it is a new database (see docs for more information)", cfg.DatabasePath)
+	}
+	if err != nil {
+		return nil, err
+	}
+	qw, err := graph.NewQuadWriter(cfg.ReplicationType, qs, cfg.ReplicationOptions)
+	if err != nil {
+		return nil, err
+	}
+	return &graph.Handle{QuadStore: qs, QuadWriter: qw}, nil
+}
+
 func init() {
 	cfg, err := configFrom("cayley_appengine.cfg")
 	if err != nil {
 		clog.Fatalf("Error loading config: %v", err)
 	}
 
-	handle, err := db.Open(cfg)
+	handle, err := open(cfg)
 	if err != nil {
 		clog.Fatalf("Error opening database: %v", err)
 	}
-	http.SetupRoutes(handle, cfg)
+	if err := http.SetupRoutes(handle, cfg); err != nil {
+		clog.Fatalf("Error setting up routes: %v", err)
+	}
 }

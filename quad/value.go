@@ -15,6 +15,10 @@ import (
 	"github.com/cayleygraph/cayley/voc/schema"
 )
 
+func IsValidValue(v Value) bool {
+	return v != nil
+}
+
 // Value is a type used by all quad directions.
 type Value interface {
 	String() string
@@ -120,18 +124,33 @@ func StringToValue(v string) Value {
 	if len(v) > 2 {
 		if v[0] == '<' && v[len(v)-1] == '>' {
 			return IRI(v[1 : len(v)-1])
+		} else if v[0] == '"' && v[len(v)-1] == '"' {
+			return String(v[1 : len(v)-1])
 		} else if v[:2] == "_:" {
 			return BNode(v[2:])
+		} else if i := strings.Index(v, `"^^<`); i > 0 && v[0] == '"' && v[len(v)-1] == '>' {
+			return TypedString{Value: String(v[1:i]), Type: IRI(v[i+4 : len(v)-1])}
+		} else if i := strings.Index(v, `"@`); i > 0 && v[0] == '"' && v[len(v)-1] != '"' {
+			return LangString{Value: String(v[1:i]), Lang: v[i+2:]}
 		}
 	}
 	return String(v)
 }
 
-// Raw is a Turtle/NQuads-encoded value.
-type Raw string
+// ToString casts a values to String or falls back to StringOf.
+func ToString(v Value) string {
+	if s, ok := v.(String); ok {
+		return string(s)
+	}
+	return StringOf(v)
+}
 
-func (s Raw) String() string      { return string(s) }
-func (s Raw) Native() interface{} { return s }
+// Raw is a Turtle/NQuads-encoded value.
+//
+// Deprecated: use IRI or String instead.
+func Raw(s string) Value {
+	return StringToValue(s)
+}
 
 // String is an RDF string value (ex: "name").
 type String string
@@ -147,6 +166,9 @@ var escaper = strings.NewReplacer(
 func (s String) String() string {
 	//TODO(barakmich): Proper escaping.
 	return `"` + escaper.Replace(string(s)) + `"`
+}
+func (s String) GoString() string {
+	return "quad.String(" + strconv.Quote(string(s)) + ")"
 }
 func (s String) Native() interface{} { return string(s) }
 
@@ -196,7 +218,10 @@ func (s LangString) Native() interface{} { return s.Value.Native() }
 // IRI is an RDF Internationalized Resource Identifier (ex: <name>).
 type IRI string
 
-func (s IRI) String() string      { return `<` + string(s) + `>` }
+func (s IRI) String() string { return `<` + string(s) + `>` }
+func (s IRI) GoString() string {
+	return "quad.IRI(" + strconv.Quote(string(s)) + ")"
+}
 func (s IRI) Short() IRI          { return IRI(voc.ShortIRI(string(s))) }
 func (s IRI) Full() IRI           { return IRI(voc.FullIRI(string(s))) }
 func (s IRI) Native() interface{} { return s }
@@ -210,7 +235,10 @@ func (s IRI) FullWith(n *voc.Namespaces) IRI {
 // BNode is an RDF Blank Node (ex: _:name).
 type BNode string
 
-func (s BNode) String() string      { return `_:` + string(s) }
+func (s BNode) String() string { return `_:` + string(s) }
+func (s BNode) GoString() string {
+	return "quad.BNode(" + strconv.Quote(string(s)) + ")"
+}
 func (s BNode) Native() interface{} { return s }
 
 // Native support for basic types
@@ -375,7 +403,7 @@ func (s Time) Equal(v Value) bool {
 func (s Time) TypedString() TypedString {
 	return TypedString{
 		// TODO(dennwc): this is used to compute hash, thus we might want to include nanos
-		Value: String(time.Time(s).Format(time.RFC3339)),
+		Value: String(time.Time(s).UTC().Format(time.RFC3339)),
 		Type:  defaultTimeType,
 	}
 }

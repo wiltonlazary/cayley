@@ -11,16 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// +build appengine appenginevm
+
 package gaedatastore
 
 import (
 	"errors"
+	"net/http"
 	"testing"
+	"time"
 
 	"github.com/cayleygraph/cayley/graph"
 	"github.com/cayleygraph/cayley/graph/graphtest"
+	"github.com/cayleygraph/cayley/graph/graphtest/testutil"
 	"github.com/cayleygraph/cayley/quad"
-	"github.com/cayleygraph/cayley/writer"
 	"github.com/stretchr/testify/require"
 
 	"google.golang.org/appengine/aetest"
@@ -52,31 +56,12 @@ type pair struct {
 	value int64
 }
 
-func makeTestStore(data []quad.Quad, opts graph.Options) (graph.QuadStore, graph.QuadWriter, []pair) {
-	seen := make(map[quad.Value]struct{})
-
-	qs, _ := newQuadStore("", opts)
-	qs, _ = newQuadStoreForRequest(qs, opts)
-	var (
-		val int64
-		ind []pair
-	)
-	writer, _ := writer.NewSingleReplication(qs, nil)
-	for _, t := range data {
-		for _, qp := range []quad.Value{t.Subject, t.Predicate, t.Object, t.Label} {
-			if _, ok := seen[qp]; !ok && qp != nil {
-				val++
-				ind = append(ind, pair{qp.String(), val})
-				seen[qp] = struct{}{}
-			}
-		}
-	}
-	writer.AddQuadSet(data)
-	return qs, writer, ind
-}
-
-func createInstance() (aetest.Instance, graph.Options, error) {
-	inst, err := aetest.NewInstance(&aetest.Options{"", true})
+func createInstance() (aetest.Instance, *http.Request, error) {
+	inst, err := aetest.NewInstance(&aetest.Options{
+		AppID: "",
+		StronglyConsistentDatastore: true,
+		StartupTimeout:              15 * time.Second,
+	})
 	if err != nil {
 		return nil, nil, errors.New("Creation of new instance failed")
 	}
@@ -84,25 +69,23 @@ func createInstance() (aetest.Instance, graph.Options, error) {
 	if err != nil {
 		return nil, nil, errors.New("Creation of new request failed")
 	}
-	opts := make(graph.Options)
-	opts["HTTPRequest"] = req1
-	return inst, opts, nil
+	return inst, req1, nil
 }
 
 func makeGAE(t testing.TB) (graph.QuadStore, graph.Options, func()) {
-	inst, opts, err := createInstance()
-	require.Nil(t, err)
-	qs, err := newQuadStore("", opts)
+	inst, r, err := createInstance()
+	require.NoError(t, err)
+	qs, err := newQuadStore("", nil)
 	if err != nil {
 		inst.Close()
 		t.Fatal(err)
 	}
-	qs, err = newQuadStoreForRequest(qs, opts)
+	qs, err = qs.(*QuadStore).ForRequest(r)
 	if err != nil {
 		inst.Close()
 		t.Fatal(err)
 	}
-	return qs, opts, func() {
+	return qs, nil, func() {
 		qs.Close()
 		inst.Close()
 	}
@@ -110,8 +93,8 @@ func makeGAE(t testing.TB) (graph.QuadStore, graph.Options, func()) {
 
 func TestGAEAll(t *testing.T) {
 	graphtest.TestAll(t, makeGAE, &graphtest.Config{
-		SkipIntHorizon: true,
-		UnTyped:        true,
+		NoPrimitives: true,
+		UnTyped:      true,
 	})
 }
 
@@ -119,13 +102,13 @@ func TestIterators(t *testing.T) {
 	qs, opts, closer := makeGAE(t)
 	defer closer()
 
-	graphtest.MakeWriter(t, qs, opts, graphtest.MakeQuadSet()...)
+	testutil.MakeWriter(t, qs, opts, graphtest.MakeQuadSet()...)
 
 	require.Equal(t, int64(11), qs.Size(), "Incorrect number of quads")
 
 	var expected = []quad.Quad{
-		quad.MakeRaw("C", "follows", "B", ""),
-		quad.MakeRaw("C", "follows", "D", ""),
+		quad.Make("C", "follows", "B", ""),
+		quad.Make("C", "follows", "D", ""),
 	}
 
 	it := qs.QuadIterator(quad.Subject, qs.ValueOf(quad.Raw("C")))
@@ -134,7 +117,7 @@ func TestIterators(t *testing.T) {
 	// Test contains
 	it = qs.QuadIterator(quad.Label, qs.ValueOf(quad.Raw("status_graph")))
 	gqs := qs.(*QuadStore)
-	key := gqs.createKeyForQuad(quad.MakeRaw("G", "status", "cool", "status_graph"))
+	key := gqs.createKeyForQuad(quad.Make("G", "status", "cool", "status_graph"))
 	token := &Token{quadKind, key.StringID()}
 
 	require.True(t, it.Contains(token), "Contains failed")
@@ -142,8 +125,8 @@ func TestIterators(t *testing.T) {
 	// Test cloning an iterator
 	var it2 graph.Iterator
 	it2 = it.Clone()
-	x := it2.Describe()
-	y := it.Describe()
+	x := graph.DescribeIterator(it2)
+	y := graph.DescribeIterator(it)
 
 	require.Equal(t, y.Name, x.Name, "Iterator Clone was not successful")
 }

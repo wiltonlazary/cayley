@@ -26,8 +26,8 @@ import (
 )
 
 func (q *Query) buildFixed(s string) graph.Iterator {
-	f := q.ses.qs.FixedIterator()
-	f.Add(q.ses.qs.ValueOf(quad.Raw(s)))
+	f := iterator.NewFixed()
+	f.Add(q.ses.qs.ValueOf(quad.StringToValue(s)))
 	return f
 }
 
@@ -137,8 +137,8 @@ func (q *Query) buildIteratorTreeMapInternal(query map[string]interface{}, path 
 				return nil, err
 			}
 			subAnd := iterator.NewAnd(q.ses.qs)
-			predFixed := q.ses.qs.FixedIterator()
-			predFixed.Add(q.ses.qs.ValueOf(quad.Raw(pred)))
+			predFixed := iterator.NewFixed()
+			predFixed.Add(q.ses.qs.ValueOf(quad.StringToValue(pred)))
 			subAnd.AddSubIterator(iterator.NewLinksTo(q.ses.qs, predFixed, quad.Predicate))
 			if reverse {
 				lto := iterator.NewLinksTo(q.ses.qs, builtIt, quad.Subject)

@@ -15,7 +15,7 @@
 package http
 
 import (
-	"flag"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -26,16 +26,22 @@ import (
 	"github.com/julienschmidt/httprouter"
 
 	"github.com/cayleygraph/cayley/graph"
-	"github.com/cayleygraph/cayley/internal/config"
-	"github.com/cayleygraph/cayley/internal/db"
+	"github.com/cayleygraph/cayley/internal/gephi"
+	"github.com/cayleygraph/cayley/server/http"
 )
 
-type ResponseHandler func(http.ResponseWriter, *http.Request, httprouter.Params) int
-
-var assetsPath = flag.String("assets", "", "Explicit path to the HTTP assets.")
+var AssetsPath string
+var defaultAssetPaths = []string{
+  ".", "..", "./assets",
+  "/usr/local/share/cayley/assets",
+  os.ExpandEnv("$GOPATH/src/github.com/cayleygraph/cayley"),
+}
 var assetsDirs = []string{"templates", "static", "docs"}
 
 func hasAssets(path string) bool {
+	if len(assetsDirs) == 0 {
+		return false
+	}
 	for _, dir := range assetsDirs {
 		if _, err := os.Stat(fmt.Sprint(path, "/", dir)); os.IsNotExist(err) {
 			return false
@@ -44,31 +50,31 @@ func hasAssets(path string) bool {
 	return true
 }
 
-func findAssetsPath() string {
-	if *assetsPath != "" {
-		if hasAssets(*assetsPath) {
-			return *assetsPath
+func findAssetsPath() (string, error) {
+	if AssetsPath != "" {
+		if hasAssets(AssetsPath) {
+			return AssetsPath, nil
 		}
-		clog.Fatalf("Cannot find assets at", *assetsPath, ".")
+		return "", fmt.Errorf("cannot find assets at %q", AssetsPath)
 	}
-
-	if hasAssets(".") {
-		return "."
+	for _, path := range defaultAssetPaths {
+		if hasAssets(path) {
+			return path, nil
+		}
 	}
-
-	if hasAssets("..") {
-		return ".."
-	}
-
-	gopathPath := os.ExpandEnv("$GOPATH/src/github.com/cayleygraph/cayley")
-	if hasAssets(gopathPath) {
-		return gopathPath
-	}
-	clog.Fatalf("Cannot find assets in any of the default search paths. Please run in the same directory, in a Go workspace, or set --assets .")
-	panic("cannot reach")
+	return "", nil
 }
 
-func LogRequest(handler ResponseHandler) httprouter.Handle {
+type statusWriter struct {
+	http.ResponseWriter
+	code *int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	*(w.code) = code
+}
+
+func LogRequest(handler httprouter.Handle) httprouter.Handle {
 	return func(w http.ResponseWriter, req *http.Request, params httprouter.Params) {
 		start := time.Now()
 		addr := req.Header.Get("X-Real-IP")
@@ -78,16 +84,21 @@ func LogRequest(handler ResponseHandler) httprouter.Handle {
 				addr = req.RemoteAddr
 			}
 		}
-		clog.Infof("Started %s %s for %s", req.Method, req.URL.Path, addr)
-		code := handler(w, req, params)
-		clog.Infof("Completed %v %s %s in %v", code, http.StatusText(code), req.URL.Path, time.Since(start))
-
+		code := 200
+		rw := &statusWriter{ResponseWriter: w, code: &code}
+		clog.Infof("started %s %s for %s", req.Method, req.URL.Path, addr)
+		handler(rw, req, params)
+		clog.Infof("completed %v %s %s in %v", code, http.StatusText(code), req.URL.Path, time.Since(start))
 	}
 }
 
-func jsonResponse(w http.ResponseWriter, code int, err interface{}) int {
-	http.Error(w, fmt.Sprintf("{\"error\" : \"%s\"}", err), code)
-	return code
+func jsonResponse(w http.ResponseWriter, code int, err interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	w.Write([]byte(`{"error": `))
+	data, _ := json.Marshal(fmt.Sprint(err))
+	w.Write(data)
+	w.Write([]byte(`}`))
 }
 
 type TemplateRequestHandler struct {
@@ -106,66 +117,84 @@ func (h *TemplateRequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 }
 
 type API struct {
-	config *config.Config
+	config *Config
 	handle *graph.Handle
 }
 
 func (api *API) GetHandleForRequest(r *http.Request) (*graph.Handle, error) {
-	if !api.config.RequiresHTTPRequestContext {
-		return api.handle, nil
-	}
+	return cayleyhttp.HandleForRequest(api.handle, "single", nil, r)
+}
 
-	opts := make(graph.Options)
-	opts["HTTPRequest"] = r
+func (api *API) RWOnly(handler httprouter.Handle) httprouter.Handle {
+	if api.config.ReadOnly {
+		return func(w http.ResponseWriter, req *http.Request, params httprouter.Params) {
+			jsonResponse(w, http.StatusForbidden, "Database is read-only.")
+		}
+	}
+	return handler
+}
 
-	qs, err := graph.NewQuadStoreForRequest(api.handle.QuadStore, opts)
-	if err != nil {
-		return nil, err
+func CORSFunc(w http.ResponseWriter, req *http.Request, params httprouter.Params) {
+	if origin := req.Header.Get("Origin"); origin != "" {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+		w.Header().Set("Access-Control-Allow-Headers",
+			"Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
 	}
-	qw, err := db.OpenQuadWriter(qs, api.config)
-	if err != nil {
-		return nil, err
+}
+
+func CORS(h httprouter.Handle) httprouter.Handle {
+	return func(w http.ResponseWriter, req *http.Request, params httprouter.Params) {
+		CORSFunc(w, req, params)
+		h(w, req, params)
 	}
-	return &graph.Handle{QuadStore: qs, QuadWriter: qw}, nil
 }
 
 func (api *API) APIv1(r *httprouter.Router) {
-	r.POST("/api/v1/query/:query_lang", LogRequest(api.ServeV1Query))
-	r.POST("/api/v1/shape/:query_lang", LogRequest(api.ServeV1Shape))
-	r.POST("/api/v1/write", LogRequest(api.ServeV1Write))
-	r.POST("/api/v1/write/file/nquad", LogRequest(api.ServeV1WriteNQuad))
-	//TODO(barakmich): /write/text/nquad, which reads from request.body instead of HTML5 file form?
-	r.POST("/api/v1/delete", LogRequest(api.ServeV1Delete))
+	r.POST("/api/v1/query/:query_lang", CORS(LogRequest(api.ServeV1Query)))
+	r.POST("/api/v1/shape/:query_lang", CORS(LogRequest(api.ServeV1Shape)))
+	r.POST("/api/v1/write", CORS(api.RWOnly(LogRequest(api.ServeV1Write))))
+	r.POST("/api/v1/write/file/nquad", CORS(api.RWOnly(LogRequest(api.ServeV1WriteNQuad))))
+	r.POST("/api/v1/delete", CORS(api.RWOnly(LogRequest(api.ServeV1Delete))))
 }
 
-func SetupRoutes(handle *graph.Handle, cfg *config.Config) {
+type Config struct {
+	ReadOnly bool
+	Timeout  time.Duration
+	Batch    int
+}
+
+func SetupRoutes(handle *graph.Handle, cfg *Config) error {
 	r := httprouter.New()
-	assets := findAssetsPath()
-	if clog.V(2) {
-		clog.Infof("Found assets at %v", assets)
-	}
-	var templates = template.Must(template.ParseGlob(fmt.Sprint(assets, "/templates/*.tmpl")))
-	templates.ParseGlob(fmt.Sprint(assets, "/templates/*.html"))
-	root := &TemplateRequestHandler{templates: templates}
-	docs := &DocRequestHandler{assets: assets}
 	api := &API{config: cfg, handle: handle}
+	r.OPTIONS("/*path", CORSFunc)
 	api.APIv1(r)
 
-	//m.Use(martini.Static("static", martini.StaticOptions{Prefix: "/static", SkipLogging: true}))
-	//r.Handler("GET", "/static", http.StripPrefix("/static", http.FileServer(http.Dir("static/"))))
-	r.GET("/docs/:docpage", docs.ServeHTTP)
-	r.GET("/ui/:ui_type", root.ServeHTTP)
-	r.GET("/", root.ServeHTTP)
-	http.Handle("/static/", http.StripPrefix("/static", http.FileServer(http.Dir(fmt.Sprint(assets, "/static/")))))
-	http.Handle("/", r)
-}
+	api2 := cayleyhttp.NewAPIv2(handle)
+	api2.SetReadOnly(cfg.ReadOnly)
+	api2.SetBatchSize(cfg.Batch)
+	api2.SetQueryTimeout(cfg.Timeout)
+	api2.RegisterOn(r, CORS, LogRequest)
 
-func Serve(handle *graph.Handle, cfg *config.Config) {
-	SetupRoutes(handle, cfg)
-	clog.Infof("Cayley now listening on %s:%s\n", cfg.ListenHost, cfg.ListenPort)
-	fmt.Printf("Cayley now listening on %s:%s\n", cfg.ListenHost, cfg.ListenPort)
-	err := http.ListenAndServe(fmt.Sprintf("%s:%s", cfg.ListenHost, cfg.ListenPort), nil)
-	if err != nil {
-		clog.Fatalf("ListenAndServe: %v", err)
+	gs := &gephi.GraphStreamHandler{QS: handle.QuadStore}
+	const gephiPath = "/gephi/gs"
+	r.GET(gephiPath, CORS(gs.ServeHTTP))
+
+	if assets, err := findAssetsPath(); err != nil {
+		return err
+	} else if assets != "" {
+		clog.Infof("using assets from %q", assets)
+		docs := &DocRequestHandler{assets: assets}
+		r.GET("/docs/:docpage", docs.ServeHTTP)
+
+		var templates = template.Must(template.ParseGlob(fmt.Sprint(assets, "/templates/*.tmpl")))
+		templates.ParseGlob(fmt.Sprint(assets, "/templates/*.html"))
+		root := &TemplateRequestHandler{templates: templates}
+		r.GET("/ui/:ui_type", root.ServeHTTP)
+		r.GET("/", root.ServeHTTP)
+		http.Handle("/static/", http.StripPrefix("/static", http.FileServer(http.Dir(fmt.Sprint(assets, "/static/")))))
 	}
+
+	http.Handle("/", r)
+	return nil
 }

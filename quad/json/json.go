@@ -16,6 +16,24 @@ func init() {
 		Mime:   []string{"application/json"},
 		Writer: func(w io.Writer) quad.WriteCloser { return NewWriter(w) },
 		Reader: func(r io.Reader) quad.ReadCloser { return NewReader(r) },
+		MarshalValue: func(v quad.Value) ([]byte, error) {
+			return json.Marshal(quad.ToString(v))
+		},
+		UnmarshalValue: func(b []byte) (quad.Value, error) {
+			var s *string
+			if err := json.Unmarshal(b, &s); err != nil {
+				return nil, err
+			} else if s == nil {
+				return nil, nil
+			}
+			return quad.StringToValue(*s), nil
+		},
+	})
+	quad.RegisterFormat(quad.Format{
+		Name:   "json-stream",
+		Mime:   []string{"application/x-json-stream"},
+		Writer: func(w io.Writer) quad.WriteCloser { return NewStreamWriter(w) },
+		Reader: func(r io.Reader) quad.ReadCloser { return NewStreamReader(r) },
 	})
 }
 
@@ -49,6 +67,25 @@ func (r *Reader) ReadQuad() (quad.Quad, error) {
 	return q, nil
 }
 func (r *Reader) Close() error { return nil }
+
+func NewStreamReader(r io.Reader) *StreamReader {
+	return &StreamReader{dec: json.NewDecoder(r)}
+}
+
+type StreamReader struct {
+	dec *json.Decoder
+	err error
+}
+
+func (r *StreamReader) ReadQuad() (quad.Quad, error) {
+	if r.err != nil {
+		return quad.Quad{}, r.err
+	}
+	var q quad.Quad
+	r.err = r.dec.Decode(&q)
+	return q, r.err
+}
+func (r *StreamReader) Close() error { return nil }
 
 func NewWriter(w io.Writer) *Writer {
 	return &Writer{w: w}
@@ -94,3 +131,17 @@ func (w *Writer) Close() error {
 	_, err := w.w.Write([]byte("\n]\n"))
 	return err
 }
+
+func NewStreamWriter(w io.Writer) *StreamWriter {
+	return &StreamWriter{enc: json.NewEncoder(w)}
+}
+
+type StreamWriter struct {
+	enc *json.Encoder
+}
+
+func (w *StreamWriter) WriteQuad(q quad.Quad) error {
+	return w.enc.Encode(q)
+}
+
+func (w *StreamWriter) Close() error { return nil }

@@ -15,13 +15,16 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/ioutil"
 	"net/http"
+	"net/url"
+	"strconv"
 
 	"github.com/julienschmidt/httprouter"
-	"golang.org/x/net/context"
 
 	"github.com/cayleygraph/cayley/query"
 )
@@ -34,16 +37,16 @@ type ErrorQueryWrapper struct {
 	Error string `json:"error"`
 }
 
-func WrapErrResult(err error) ([]byte, error) {
-	var wrap ErrorQueryWrapper
-	wrap.Error = err.Error()
-	return json.MarshalIndent(wrap, "", " ")
+func WriteError(w io.Writer, err error) error {
+	enc := json.NewEncoder(w)
+	//enc.SetIndent("", " ")
+	return enc.Encode(ErrorQueryWrapper{err.Error()})
 }
 
-func WrapResult(result interface{}) ([]byte, error) {
-	var wrap SuccessQueryWrapper
-	wrap.Result = result
-	return json.MarshalIndent(wrap, "", " ")
+func WriteResult(w io.Writer, result interface{}) error {
+	enc := json.NewEncoder(w)
+	//enc.SetIndent("", " ")
+	return enc.Encode(SuccessQueryWrapper{result})
 }
 
 func GetQueryShape(q string, ses query.HTTP) ([]byte, error) {
@@ -72,12 +75,13 @@ func defaultErrorFunc(w query.ResponseWriter, err error) {
 }
 
 // TODO(barakmich): Turn this into proper middleware.
-func (api *API) ServeV1Query(w http.ResponseWriter, r *http.Request, params httprouter.Params) int {
+func (api *API) ServeV1Query(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
 	ctx, cancel := api.contextForRequest(r)
 	defer cancel()
 	l := query.GetLanguage(params.ByName("query_lang"))
 	if l == nil {
-		return jsonResponse(w, 400, "Unknown query language.")
+		jsonResponse(w, http.StatusBadRequest, "Unknown query language.")
+		return
 	}
 	errFunc := defaultErrorFunc
 	if l.HTTPError != nil {
@@ -86,33 +90,40 @@ func (api *API) ServeV1Query(w http.ResponseWriter, r *http.Request, params http
 	select {
 	case <-ctx.Done():
 		errFunc(w, ctx.Err())
-		return 0
+		return
 	default:
 	}
 	h, err := api.GetHandleForRequest(r)
 	if err != nil {
 		errFunc(w, err)
-		return 400
+		return
 	}
 	if l.HTTPQuery != nil {
 		defer r.Body.Close()
 		l.HTTPQuery(ctx, h.QuadStore, w, r.Body)
-		return 0
+		return
 	}
 	if l.HTTP == nil {
 		errFunc(w, errors.New("HTTP interface is not supported for this query language."))
-		return 400
+		return
 	}
+
+	par, _ := url.ParseQuery(r.URL.RawQuery)
+	limit, _ := strconv.Atoi(par.Get("limit"))
+	if limit == 0 {
+		limit = 100
+	}
+
 	ses := l.HTTP(h.QuadStore)
 	bodyBytes, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		errFunc(w, err)
-		return 400
+		return
 	}
 	code := string(bodyBytes)
 
 	c := make(chan query.Result, 5)
-	go ses.Execute(ctx, code, c, 100)
+	go ses.Execute(ctx, code, c, limit)
 
 	for res := range c {
 		if err := res.Err(); err != nil {
@@ -120,57 +131,56 @@ func (api *API) ServeV1Query(w http.ResponseWriter, r *http.Request, params http
 				continue // wait for results channel to close
 			}
 			errFunc(w, err)
-			return 400
+			return
 		}
 		ses.Collate(res)
 	}
 	output, err := ses.Results()
 	if err != nil {
 		errFunc(w, err)
-		return 400
+		return
 	}
-	bytes, err := WrapResult(output)
-	if err != nil {
-		errFunc(w, err)
-		return 400
-	}
-	w.Write(bytes)
-	return 200
+	_ = WriteResult(w, output)
 }
 
-func (api *API) ServeV1Shape(w http.ResponseWriter, r *http.Request, params httprouter.Params) int {
+func (api *API) ServeV1Shape(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
 	ctx, cancel := api.contextForRequest(r)
 	defer cancel()
 	select {
 	case <-ctx.Done():
-		return jsonResponse(w, 400, "Cancelled")
+		jsonResponse(w, http.StatusBadRequest, "Cancelled")
+		return
 	default:
 	}
 	h, err := api.GetHandleForRequest(r)
 	if err != nil {
-		return jsonResponse(w, 400, err)
+		jsonResponse(w, http.StatusBadRequest, err)
+		return
 	}
 	l := query.GetLanguage(params.ByName("query_lang"))
 	if l == nil {
-		return jsonResponse(w, 400, "Unknown query language.")
+		jsonResponse(w, http.StatusBadRequest, "Unknown query language.")
+		return
 	} else if l.HTTP == nil {
-		return jsonResponse(w, 400, "HTTP interface is not supported for this query language.")
+		jsonResponse(w, http.StatusBadRequest, "HTTP interface is not supported for this query language.")
+		return
 	}
 	ses := l.HTTP(h.QuadStore)
 	bodyBytes, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		return jsonResponse(w, 400, err)
+		jsonResponse(w, http.StatusBadRequest, err)
+		return
 	}
 	code := string(bodyBytes)
 
 	output, err := GetQueryShape(code, ses)
 	if err == query.ErrParseMore {
-		return jsonResponse(w, 500, "Incomplete data?")
+		jsonResponse(w, http.StatusBadRequest, "Incomplete data?")
+		return
 	} else if err != nil {
-		bytes, _ := WrapErrResult(err)
-		http.Error(w, string(bytes), 400)
-		return 400
+		w.WriteHeader(http.StatusBadRequest)
+		WriteError(w, err)
+		return
 	}
 	w.Write(output)
-	return 200
 }

@@ -12,23 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package iterator
+package iterator_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
+	. "github.com/cayleygraph/cayley/graph/iterator"
 	"github.com/cayleygraph/cayley/quad"
 )
 
 func TestHasAIteratorErr(t *testing.T) {
 	wantErr := errors.New("unique")
+	ctx := context.TODO()
 	errIt := newTestIterator(false, wantErr)
 
 	// TODO(andrew-d): pass a non-nil quadstore
 	hasa := NewHasA(nil, errIt, quad.Subject)
 
-	if hasa.Next() != false {
+	if hasa.Next(ctx) != false {
 		t.Errorf("HasA iterator did not pass through initial 'false'")
 	}
 	if hasa.Err() != wantErr {

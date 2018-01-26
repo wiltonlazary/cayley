@@ -1,8 +1,12 @@
 package iterator
 
 import (
+	"context"
+
 	"github.com/cayleygraph/cayley/graph"
 )
+
+var _ graph.Iterator = &Unique{}
 
 // Unique iterator removes duplicate values from it's subiterator.
 type Unique struct {
@@ -39,13 +43,7 @@ func (it *Unique) Tagger() *graph.Tagger {
 }
 
 func (it *Unique) TagResults(dst map[string]graph.Value) {
-	for _, tag := range it.tags.Tags() {
-		dst[tag] = it.Result()
-	}
-
-	for tag, value := range it.tags.Fixed() {
-		dst[tag] = value
-	}
+	it.tags.TagResult(dst, it.Result())
 
 	if it.subIt != nil {
 		it.subIt.TagResults(dst)
@@ -66,16 +64,13 @@ func (it *Unique) SubIterators() []graph.Iterator {
 
 // Next advances the subiterator, continuing until it returns a value which it
 // has not previously seen.
-func (it *Unique) Next() bool {
+func (it *Unique) Next(ctx context.Context) bool {
 	graph.NextLogIn(it)
 	it.runstats.Next += 1
 
-	for it.subIt.Next() {
+	for it.subIt.Next(ctx) {
 		curr := it.subIt.Result()
-		var key interface{} = curr
-		if v, ok := curr.(graph.Keyer); ok {
-			key = v.Key()
-		}
+		key := graph.ToKey(curr)
 		if ok := it.seen[key]; !ok {
 			it.result = curr
 			it.seen[key] = true
@@ -96,16 +91,16 @@ func (it *Unique) Result() graph.Value {
 
 // Contains checks whether the passed value is part of the primary iterator,
 // which is irrelevant for uniqueness.
-func (it *Unique) Contains(val graph.Value) bool {
+func (it *Unique) Contains(ctx context.Context, val graph.Value) bool {
 	graph.ContainsLogIn(it, val)
 	it.runstats.Contains += 1
-	return graph.ContainsLogOut(it, val, it.subIt.Contains(val))
+	return graph.ContainsLogOut(it, val, it.subIt.Contains(ctx, val))
 }
 
 // NextPath for unique always returns false. If we were to return multiple
 // paths, we'd no longer be a unique result, so we have to choose only the first
 // path that got us here. Unique is serious on this point.
-func (it *Unique) NextPath() bool {
+func (it *Unique) NextPath(ctx context.Context) bool {
 	return false
 }
 
@@ -145,17 +140,6 @@ func (it *Unique) Size() (int64, bool) {
 	return st.Size, st.ExactSize
 }
 
-func (it *Unique) Describe() graph.Description {
-	subIts := []graph.Description{
-		it.subIt.Describe(),
-	}
-
-	return graph.Description{
-		UID:       it.UID(),
-		Type:      it.Type(),
-		Tags:      it.tags.Tags(),
-		Iterators: subIts,
-	}
+func (it *Unique) String() string {
+	return "Unique"
 }
-
-var _ graph.Iterator = &Unique{}

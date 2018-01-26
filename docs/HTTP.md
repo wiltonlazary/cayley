@@ -1,14 +1,27 @@
 # HTTP Methods
 
+This file covers deprecated v1 HTTP API. All the methods of v2 HTTP API is described in OpenAPI/Swagger [spec](./api/swagger.yml)
+and can be viewed by importing `https://raw.githubusercontent.com/cayleygraph/cayley/master/docs/api/swagger.yml` URL into [Swagger Editor](https://editor.swagger.io/) or [Swagger UI demo](http://petstore.swagger.io/).
+
+## Gephi
+
+Cayley supports streaming to Gephi via [GraphStream](GephiGraphStream.md).
+
 ## API v1
 
 Unless otherwise noted, all URIs take a POST command.
 
 ### Queries and Results
 
-#### `/api/v1/query/gremlin`
+#### `/api/v1/query/gizmo`
 
 POST Body: Javascript source code of the query
+
+Response: JSON results, depending on the query.
+
+#### `/api/v1/query/graphql`
+
+POST Body: [GraphQL](GraphQL.md) query
 
 Response: JSON results, depending on the query.
 
@@ -17,7 +30,7 @@ Response: JSON results, depending on the query.
 POST Body: JSON MQL query
 
 Response: JSON results, with a query wrapper:
-```json
+```js
 {
 	"result": <JSON Result set>
 }
@@ -25,7 +38,7 @@ Response: JSON results, with a query wrapper:
 
 If the JSON is invalid or an error occurs:
 
-```json
+```js
 {
 	"error": "Error message"
 }
@@ -36,7 +49,7 @@ If the JSON is invalid or an error occurs:
 
 Result form:
 
-```json
+```js
 {
 	"nodes": [{
 		"id" : integer,
@@ -54,7 +67,7 @@ Result form:
 }
 ```
 
-#### `/api/v1/shape/gremlin`
+#### `/api/v1/shape/gizmo`
 
 POST Body: Javascript source code of the query
 
@@ -71,14 +84,14 @@ Response: JSON description of the query.
 Responses come in the form
 
 200 Success:
-```json
+```js
 {
 	"result": "Success message."
 }
 ```
 
 400 / 500 Error:
-```json
+```js
 {
 	"error": "Error message."
 }
@@ -88,7 +101,7 @@ Responses come in the form
 
 POST Body: JSON quads
 
-```json
+```js
 [{
 	"subject": "Subject Node",
 	"predicate": "Predicate Node",
@@ -116,7 +129,7 @@ curl http://localhost:64210/api/v1/write/file/nquad -F NQuadFile=@30k.n3
 
 POST Body: JSON quads
 
-```json
+```js
 [{
 	"subject": "Subject Node",
 	"predicate": "Predicate Node",

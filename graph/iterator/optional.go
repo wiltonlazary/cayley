@@ -27,8 +27,15 @@ package iterator
 // -- all things in the graph. It matches everything (as does the regex "(a)?")
 
 import (
+	"context"
+
 	"github.com/cayleygraph/cayley/clog"
 	"github.com/cayleygraph/cayley/graph"
+)
+
+var (
+	_ graph.Iterator = &Optional{}
+	_ graph.NoNext   = &Optional{}
 )
 
 // An optional iterator has the sub-constraint iterator we wish to be optional
@@ -82,7 +89,7 @@ func (it *Optional) Result() graph.Value {
 }
 
 // Optional iterator cannot be Next()'ed.
-func (it *Optional) Next() bool {
+func (it *Optional) Next(ctx context.Context) bool {
 	clog.Errorf("Nexting an un-nextable iterator: %T", it)
 	return false
 }
@@ -93,9 +100,9 @@ func (it *Optional) NoNext() {}
 // An optional iterator only has a next result if, (a) last time we checked
 // we had any results whatsoever, and (b) there was another subresult in our
 // optional subbranch.
-func (it *Optional) NextPath() bool {
+func (it *Optional) NextPath(ctx context.Context) bool {
 	if it.lastCheck {
-		ok := it.subIt.NextPath()
+		ok := it.subIt.NextPath(ctx)
 		if !ok {
 			it.err = it.subIt.Err()
 		}
@@ -104,16 +111,15 @@ func (it *Optional) NextPath() bool {
 	return false
 }
 
-// No subiterators.
 func (it *Optional) SubIterators() []graph.Iterator {
-	return nil
+	return []graph.Iterator{it.subIt}
 }
 
 // Contains() is the real hack of this iterator. It always returns true, regardless
 // of whether the subiterator matched. But we keep track of whether the subiterator
 // matched for results purposes.
-func (it *Optional) Contains(val graph.Value) bool {
-	checked := it.subIt.Contains(val)
+func (it *Optional) Contains(ctx context.Context, val graph.Value) bool {
+	checked := it.subIt.Contains(ctx, val)
 	it.lastCheck = checked
 	it.err = it.subIt.Err()
 	it.result = val
@@ -132,14 +138,8 @@ func (it *Optional) TagResults(dst map[string]graph.Value) {
 // Registers the optional iterator.
 func (it *Optional) Type() graph.Type { return graph.Optional }
 
-func (it *Optional) Describe() graph.Description {
-	primary := it.subIt.Describe()
-	return graph.Description{
-		UID:      it.UID(),
-		Type:     it.Type(),
-		Tags:     it.tags.Tags(),
-		Iterator: &primary,
-	}
+func (it *Optional) String() string {
+	return "Optional"
 }
 
 // There's nothing to optimize for an optional. Optimize the subiterator and
@@ -159,17 +159,12 @@ func (it *Optional) Stats() graph.IteratorStats {
 	return graph.IteratorStats{
 		ContainsCost: subStats.ContainsCost,
 		NextCost:     int64(1 << 62),
-		Size:         subStats.Size,
-		ExactSize:    subStats.ExactSize,
+		// If it's empty, pretend like it's not.
+		Size:      subStats.Size + 1,
+		ExactSize: subStats.ExactSize,
 	}
 }
 
-// If you're empty and you know it, clap your hands.
 func (it *Optional) Size() (int64, bool) {
-	return 0, true
+	return it.Stats().Size, false
 }
-
-var (
-	_ graph.Iterator = &Optional{}
-	_ graph.NoNext   = &Optional{}
-)

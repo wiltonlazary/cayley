@@ -1,8 +1,12 @@
 package iterator
 
 import (
+	"context"
+
 	"github.com/cayleygraph/cayley/graph"
 )
+
+var _ graph.Iterator = &Not{}
 
 // Not iterator acts like a complement for the primary iterator.
 // It will return all the vertices which are not part of the primary iterator.
@@ -40,13 +44,7 @@ func (it *Not) Tagger() *graph.Tagger {
 }
 
 func (it *Not) TagResults(dst map[string]graph.Value) {
-	for _, tag := range it.tags.Tags() {
-		dst[tag] = it.Result()
-	}
-
-	for tag, value := range it.tags.Fixed() {
-		dst[tag] = value
-	}
+	it.tags.TagResult(dst, it.Result())
 
 	if it.primaryIt != nil {
 		it.primaryIt.TagResults(dst)
@@ -69,12 +67,12 @@ func (it *Not) SubIterators() []graph.Iterator {
 // Next advances the Not iterator. It returns whether there is another valid
 // new value. It fetches the next value of the all iterator which is not
 // contained by the primary iterator.
-func (it *Not) Next() bool {
+func (it *Not) Next(ctx context.Context) bool {
 	graph.NextLogIn(it)
 	it.runstats.Next += 1
 
-	for it.allIt.Next() {
-		if curr := it.allIt.Result(); !it.primaryIt.Contains(curr) {
+	for it.allIt.Next(ctx) {
+		if curr := it.allIt.Result(); !it.primaryIt.Contains(ctx, curr) {
 			it.result = curr
 			it.runstats.ContainsNext += 1
 			return graph.NextLogOut(it, true)
@@ -95,11 +93,11 @@ func (it *Not) Result() graph.Value {
 // Contains checks whether the passed value is part of the primary iterator's
 // complement. For a valid value, it updates the Result returned by the iterator
 // to the value itself.
-func (it *Not) Contains(val graph.Value) bool {
+func (it *Not) Contains(ctx context.Context, val graph.Value) bool {
 	graph.ContainsLogIn(it, val)
 	it.runstats.Contains += 1
 
-	if it.primaryIt.Contains(val) {
+	if it.primaryIt.Contains(ctx, val) {
 		return graph.ContainsLogOut(it, val, false)
 	}
 
@@ -115,7 +113,7 @@ func (it *Not) Contains(val graph.Value) bool {
 
 // NextPath checks whether there is another path. Not applicable, hence it will
 // return false.
-func (it *Not) NextPath() bool {
+func (it *Not) NextPath(ctx context.Context) bool {
 	return false
 }
 
@@ -163,18 +161,6 @@ func (it *Not) Size() (int64, bool) {
 	return st.Size, st.ExactSize
 }
 
-func (it *Not) Describe() graph.Description {
-	subIts := []graph.Description{
-		it.primaryIt.Describe(),
-		it.allIt.Describe(),
-	}
-
-	return graph.Description{
-		UID:       it.UID(),
-		Type:      it.Type(),
-		Tags:      it.tags.Tags(),
-		Iterators: subIts,
-	}
+func (it *Not) String() string {
+	return "Not"
 }
-
-var _ graph.Iterator = &Not{}

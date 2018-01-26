@@ -27,9 +27,12 @@ package iterator
 // In MQL terms, this is the [{"age>=": 21}] concept.
 
 import (
+	"context"
+	"fmt"
+	"time"
+
 	"github.com/cayleygraph/cayley/graph"
 	"github.com/cayleygraph/cayley/quad"
-	"time"
 )
 
 type Operator int
@@ -41,6 +44,8 @@ const (
 	CompareGTE
 	// Why no Equals? Because that's usually an AndIterator.
 )
+
+var _ graph.Iterator = &Comparison{}
 
 type Comparison struct {
 	uid    uint64
@@ -75,8 +80,6 @@ func (it *Comparison) Operator() Operator { return it.op }
 func (it *Comparison) doComparison(val graph.Value) bool {
 	qval := it.qs.NameOf(val)
 	switch cVal := it.val.(type) {
-	case quad.Raw:
-		return RunStrOp(quad.StringOf(qval), it.op, string(cVal))
 	case quad.Int:
 		if cVal2, ok := qval.(quad.Int); ok {
 			return RunIntOp(cVal2, it.op, cVal)
@@ -192,8 +195,8 @@ func (it *Comparison) Clone() graph.Iterator {
 	return out
 }
 
-func (it *Comparison) Next() bool {
-	for it.subIt.Next() {
+func (it *Comparison) Next(ctx context.Context) bool {
+	for it.subIt.Next(ctx) {
 		val := it.subIt.Result()
 		if it.doComparison(val) {
 			it.result = val
@@ -212,9 +215,9 @@ func (it *Comparison) Result() graph.Value {
 	return it.result
 }
 
-func (it *Comparison) NextPath() bool {
+func (it *Comparison) NextPath(ctx context.Context) bool {
 	for {
-		hasNext := it.subIt.NextPath()
+		hasNext := it.subIt.NextPath(ctx)
 		if !hasNext {
 			it.err = it.subIt.Err()
 			return false
@@ -231,11 +234,11 @@ func (it *Comparison) SubIterators() []graph.Iterator {
 	return []graph.Iterator{it.subIt}
 }
 
-func (it *Comparison) Contains(val graph.Value) bool {
+func (it *Comparison) Contains(ctx context.Context, val graph.Value) bool {
 	if !it.doComparison(val) {
 		return false
 	}
-	ok := it.subIt.Contains(val)
+	ok := it.subIt.Contains(ctx, val)
 	if !ok {
 		it.err = it.subIt.Err()
 	}
@@ -245,13 +248,7 @@ func (it *Comparison) Contains(val graph.Value) bool {
 // If we failed the check, then the subiterator should not contribute to the result
 // set. Otherwise, go ahead and tag it.
 func (it *Comparison) TagResults(dst map[string]graph.Value) {
-	for _, tag := range it.tags.Tags() {
-		dst[tag] = it.Result()
-	}
-
-	for tag, value := range it.tags.Fixed() {
-		dst[tag] = value
-	}
+	it.tags.TagResult(dst, it.Result())
 
 	it.subIt.TagResults(dst)
 }
@@ -259,13 +256,8 @@ func (it *Comparison) TagResults(dst map[string]graph.Value) {
 // Registers the value-comparison iterator.
 func (it *Comparison) Type() graph.Type { return graph.Comparison }
 
-func (it *Comparison) Describe() graph.Description {
-	primary := it.subIt.Describe()
-	return graph.Description{
-		UID:      it.UID(),
-		Type:     it.Type(),
-		Iterator: &primary,
-	}
+func (it *Comparison) String() string {
+	return fmt.Sprintf("Comparison(%v, %v)", it.op, it.val)
 }
 
 // There's nothing to optimize, locally, for a value-comparison iterator.
@@ -287,7 +279,6 @@ func (it *Comparison) Stats() graph.IteratorStats {
 }
 
 func (it *Comparison) Size() (int64, bool) {
-	return 0, false
+	sz, _ := it.subIt.Size()
+	return sz / 2, false
 }
-
-var _ graph.Iterator = &Comparison{}

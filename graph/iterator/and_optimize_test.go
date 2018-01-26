@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package iterator
+package iterator_test
 
 // Tests relating to methods in and-iterator-optimize. Many are pretty simplistic, but
 // nonetheless cover a lot of basic cases.
@@ -23,15 +23,17 @@ import (
 	"testing"
 
 	"github.com/cayleygraph/cayley/graph"
+	"github.com/cayleygraph/cayley/graph/graphmock"
+	. "github.com/cayleygraph/cayley/graph/iterator"
 )
 
 func TestIteratorPromotion(t *testing.T) {
-	qs := &store{
-		data: []string{},
-		iter: NewFixed(Identity),
+	qs := &graphmock.Oldstore{
+		Data: []string{},
+		Iter: NewFixed(),
 	}
 	all := NewInt64(1, 3, true)
-	fixed := NewFixed(Identity, Int64Node(3))
+	fixed := NewFixed(Int64Node(3))
 	a := NewAnd(qs, all, fixed)
 	all.Tagger().Add("a")
 	fixed.Tagger().Add("b")
@@ -52,9 +54,9 @@ func TestIteratorPromotion(t *testing.T) {
 }
 
 func TestNullIteratorAnd(t *testing.T) {
-	qs := &store{
-		data: []string{},
-		iter: NewFixed(Identity),
+	qs := &graphmock.Oldstore{
+		Data: []string{},
+		Iter: NewFixed(),
 	}
 	all := NewInt64(1, 3, true)
 	null := NewNull()
@@ -69,9 +71,9 @@ func TestNullIteratorAnd(t *testing.T) {
 }
 
 func TestAllPromotion(t *testing.T) {
-	qs := &store{
-		data: []string{},
-		iter: NewFixed(Identity),
+	qs := &graphmock.Oldstore{
+		Data: []string{},
+		Iter: NewFixed(),
 	}
 	all := NewInt64(100, 300, true)
 	all.Tagger().Add("good")
@@ -101,13 +103,13 @@ func TestAllPromotion(t *testing.T) {
 }
 
 func TestReorderWithTag(t *testing.T) {
-	qs := &store{
-		data: []string{},
-		iter: NewFixed(Identity),
+	qs := &graphmock.Oldstore{
+		Data: []string{},
+		Iter: NewFixed(),
 	}
-	all := NewFixed(Identity, Int64Node(3))
+	all := NewFixed(Int64Node(3))
 	all.Tagger().Add("good")
-	all2 := NewFixed(Identity,
+	all2 := NewFixed(
 		Int64Node(3),
 		Int64Node(4),
 		Int64Node(5),
@@ -140,9 +142,9 @@ func TestReorderWithTag(t *testing.T) {
 }
 
 func TestAndStatistics(t *testing.T) {
-	qs := &store{
-		data: []string{},
-		iter: NewFixed(Identity),
+	qs := &graphmock.Oldstore{
+		Data: []string{},
+		Iter: NewFixed(),
 	}
 	all := NewInt64(100, 300, true)
 	all.Tagger().Add("good")

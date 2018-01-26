@@ -19,20 +19,18 @@ go build ./cmd/cayley
 
 Then `cd` to the directory and give it a quick test with:
 ```
-./cayley repl --dbpath=data/testdata.nq
+./cayley repl -i data/testdata.nq
 ```
 
 To run the web frontend, replace the "repl" command with "http"
 ```
-./cayley http --dbpath=data/testdata.nq
+./cayley http -i data/testdata.nq
 ```
 
 
 # Hacking on Cayley
 
-First, you'll need Go [(version 1.6.x or greater)](https://golang.org/doc/install) and a Go workspace. This is outlined by the Go team at http://golang.org/doc/code.html and is sort of the official way of going about it.
-
-Cayley should compile on Go 1.4-1.5, but it's not officially supported.
+First, you'll need Go [(version 1.9.x or greater)](https://golang.org/doc/install) and a Go workspace. This is outlined by the Go team at http://golang.org/doc/code.html and is sort of the official way of going about it.
 
 If you just want to build Cayley and check out the source, or use it as a library, a simple `go get github.com/cayleygraph/cayley` will work!
 
@@ -70,3 +68,22 @@ go build ./cmd/cayley && ./cayley <subcommand> <your options>
 Which will also resolve the relevant static content paths for serving HTTP.
 
 **Reminder:** add yourself to CONTRIBUTORS and AUTHORS.
+
+# Running Unit Tests
+
+First, `cd` into the `caley` project folder.
+
+For Go 1.9 and onwards:
+```
+go test ./...
+```
+
+If you have a Docker installed, you can also run tests for remote backend implementations:
+```
+go test -tags docker ./...
+```
+
+Integration tests can be enabled with environment variable:
+```
+RUN_INTEGRATION=true go test ./...
+```

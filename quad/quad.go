@@ -66,18 +66,20 @@ func Make(subject, predicate, object, label interface{}) (q Quad) {
 }
 
 // MakeRaw creates a quad with provided raw values (nquads-escaped).
+//
+// Deprecated: use Make pr MakeIRI instead.
 func MakeRaw(subject, predicate, object, label string) (q Quad) {
 	if subject != "" {
-		q.Subject = Raw(subject)
+		q.Subject = StringToValue(subject)
 	}
 	if predicate != "" {
-		q.Predicate = Raw(predicate)
+		q.Predicate = StringToValue(predicate)
 	}
 	if object != "" {
-		q.Object = Raw(object)
+		q.Object = StringToValue(object)
 	}
 	if label != "" {
-		q.Label = Raw(label)
+		q.Label = StringToValue(label)
 	}
 	return
 }
@@ -121,12 +123,12 @@ type rawQuad struct {
 
 func (q Quad) MarshalJSON() ([]byte, error) {
 	rq := rawQuad{
-		Subject:   q.Subject.String(),
-		Predicate: q.Predicate.String(),
-		Object:    q.Object.String(),
+		Subject:   ToString(q.Subject),
+		Predicate: ToString(q.Predicate),
+		Object:    ToString(q.Object),
 	}
 	if q.Label != nil {
-		rq.Label = q.Label.String()
+		rq.Label = ToString(q.Label)
 	}
 	return json.Marshal(rq)
 }
@@ -188,6 +190,23 @@ func (d Direction) String() string {
 	}
 }
 
+func (d Direction) GoString() string {
+	switch d {
+	case Any:
+		return "quad.Any"
+	case Subject:
+		return "quad.Subject"
+	case Predicate:
+		return "quad.Predicate"
+	case Label:
+		return "quad.Label"
+	case Object:
+		return "quad.Object"
+	default:
+		return fmt.Sprintf("%x", byte(d))
+	}
+}
+
 // Per-field accessor for quads.
 func (q Quad) Get(d Direction) Value {
 	switch d {
@@ -199,6 +218,21 @@ func (q Quad) Get(d Direction) Value {
 		return q.Label
 	case Object:
 		return q.Object
+	default:
+		panic(d.String())
+	}
+}
+
+func (q *Quad) Set(d Direction, v Value) {
+	switch d {
+	case Subject:
+		q.Subject = v
+	case Predicate:
+		q.Predicate = v
+	case Label:
+		q.Label = v
+	case Object:
+		q.Object = v
 	default:
 		panic(d.String())
 	}
@@ -226,8 +260,7 @@ func (q Quad) String() string {
 }
 
 func (q Quad) IsValid() bool {
-	return q.Subject != nil && q.Predicate != nil && q.Object != nil &&
-		q.Subject.String() != "" && q.Predicate.String() != "" && q.Object.String() != ""
+	return IsValidValue(q.Subject) && IsValidValue(q.Predicate) && IsValidValue(q.Object)
 }
 
 // Prints a quad in N-Quad format.

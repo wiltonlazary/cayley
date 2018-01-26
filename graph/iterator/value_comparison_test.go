@@ -12,25 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package iterator
+package iterator_test
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"testing"
 
 	"github.com/cayleygraph/cayley/graph"
+	"github.com/cayleygraph/cayley/graph/graphmock"
+	. "github.com/cayleygraph/cayley/graph/iterator"
 	"github.com/cayleygraph/cayley/quad"
 )
 
 var (
-	simpleStore = &store{data: []string{"0", "1", "2", "3", "4", "5"}, parse: true}
-	stringStore = &store{data: []string{"foo", "bar", "baz", "echo"}, parse: true}
-	mixedStore  = &store{data: []string{"0", "1", "2", "3", "4", "5", "foo", "bar", "baz", "echo"}, parse: true}
+	simpleStore = &graphmock.Oldstore{Data: []string{"0", "1", "2", "3", "4", "5"}, Parse: true}
+	stringStore = &graphmock.Oldstore{Data: []string{"foo", "bar", "baz", "echo"}, Parse: true}
+	mixedStore  = &graphmock.Oldstore{Data: []string{"0", "1", "2", "3", "4", "5", "foo", "bar", "baz", "echo"}, Parse: true}
 )
 
 func simpleFixedIterator() *Fixed {
-	f := NewFixed(Identity)
+	f := NewFixed()
 	for i := 0; i < 5; i++ {
 		f.Add(Int64Node(i))
 	}
@@ -38,24 +41,20 @@ func simpleFixedIterator() *Fixed {
 }
 
 func stringFixedIterator() *Fixed {
-	f := NewFixed(Identity)
-	for _, value := range stringStore.data {
-		f.Add(stringNode(value))
+	f := NewFixed()
+	for _, value := range stringStore.Data {
+		f.Add(graphmock.StringNode(value))
 	}
 	return f
 }
 
 func mixedFixedIterator() *Fixed {
-	f := NewFixed(Identity)
-	for i := 0; i < len(mixedStore.data); i++ {
+	f := NewFixed()
+	for i := 0; i < len(mixedStore.Data); i++ {
 		f.Add(Int64Node(i))
 	}
 	return f
 }
-
-type stringNode string
-
-func (stringNode) IsNode() bool { return true }
 
 var comparisonTests = []struct {
 	message  string
@@ -140,12 +139,13 @@ var comparisonTests = []struct {
 }
 
 func TestValueComparison(t *testing.T) {
+	ctx := context.TODO()
 	for _, test := range comparisonTests {
 		qs := test.qs
 		vc := NewComparison(test.iterator(), test.operator, test.operand, qs)
 
 		var got []quad.Value
-		for vc.Next() {
+		for vc.Next(ctx) {
 			got = append(got, qs.NameOf(vc.Result()))
 		}
 		if !reflect.DeepEqual(got, test.expect) {
@@ -202,7 +202,7 @@ var vciContainsTests = []struct {
 	{
 		message:  "foo is greater than or equal to echo",
 		operator: CompareGTE,
-		check:    stringNode("foo"),
+		check:    graphmock.StringNode("foo"),
 		expect:   true,
 		qs:       stringStore,
 		val:      quad.String("echo"),
@@ -211,7 +211,7 @@ var vciContainsTests = []struct {
 	{
 		message:  "echo is greater than or equal to echo",
 		operator: CompareGTE,
-		check:    stringNode("echo"),
+		check:    graphmock.StringNode("echo"),
 		expect:   true,
 		qs:       stringStore,
 		val:      quad.String("echo"),
@@ -220,7 +220,7 @@ var vciContainsTests = []struct {
 	{
 		message:  "foo is missing from the iterator",
 		operator: CompareLTE,
-		check:    stringNode("foo"),
+		check:    graphmock.StringNode("foo"),
 		expect:   false,
 		qs:       stringStore,
 		val:      quad.String("echo"),
@@ -229,9 +229,10 @@ var vciContainsTests = []struct {
 }
 
 func TestVCIContains(t *testing.T) {
+	ctx := context.TODO()
 	for _, test := range vciContainsTests {
 		vc := NewComparison(test.iterator(), test.operator, test.val, test.qs)
-		if vc.Contains(test.check) != test.expect {
+		if vc.Contains(ctx, test.check) != test.expect {
 			t.Errorf("Failed to show %s", test.message)
 		}
 	}
@@ -255,13 +256,14 @@ var comparisonIteratorTests = []struct {
 }
 
 func TestComparisonIteratorErr(t *testing.T) {
+	ctx := context.TODO()
 	wantErr := errors.New("unique")
 	errIt := newTestIterator(false, wantErr)
 
 	for _, test := range comparisonIteratorTests {
 		vc := NewComparison(errIt, CompareLT, test.val, test.qs)
 
-		if vc.Next() != false {
+		if vc.Next(ctx) != false {
 			t.Errorf("Comparison iterator did not pass through initial 'false': %s", test.message)
 		}
 		if vc.Err() != wantErr {

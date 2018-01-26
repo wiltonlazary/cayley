@@ -17,9 +17,8 @@ package graph
 // Define the general iterator interface.
 
 import (
-	"fmt"
+	"context"
 	"strings"
-	"sync"
 
 	"github.com/cayleygraph/cayley/clog"
 	"github.com/cayleygraph/cayley/quad"
@@ -45,8 +44,8 @@ type Linkage struct {
 // TODO(barakmich): Helper functions as needed, eg, ValuesForDirection(quad.Direction) []Value
 
 // Add a tag to the iterator.
-func (t *Tagger) Add(tag string) {
-	t.tags = append(t.tags, tag)
+func (t *Tagger) Add(tag ...string) {
+	t.tags = append(t.tags, tag...)
 }
 
 func (t *Tagger) AddFixed(tag string, value Value) {
@@ -66,6 +65,16 @@ func (t *Tagger) Fixed() map[string]Value {
 	return t.fixedTags
 }
 
+func (t *Tagger) TagResult(dst map[string]Value, v Value) {
+	for _, tag := range t.Tags() {
+		dst[tag] = v
+	}
+
+	for tag, value := range t.Fixed() {
+		dst[tag] = value
+	}
+}
+
 func (t *Tagger) CopyFrom(src Iterator) {
 	t.CopyFromTagger(src.Tagger())
 }
@@ -82,6 +91,9 @@ func (t *Tagger) CopyFromTagger(st *Tagger) {
 }
 
 type Iterator interface {
+	// String returns a short textual representation of an iterator.
+	String() string
+
 	Tagger() *Tagger
 
 	// Fills a tag-to-result-value map.
@@ -94,7 +106,7 @@ type Iterator interface {
 	// the Result method. It returns false if no further advancement is possible, or if an
 	// error was encountered during iteration.  Err should be consulted to distinguish
 	// between the two cases.
-	Next() bool
+	Next(ctx context.Context) bool
 
 	// These methods are the heart and soul of the iterator, as they constitute
 	// the iteration interface.
@@ -114,10 +126,10 @@ type Iterator interface {
 	//
 	// NextPath() advances iterators that may have more than one valid result,
 	// from the bottom up.
-	NextPath() bool
+	NextPath(ctx context.Context) bool
 
 	// Contains returns whether the value is within the set held by the iterator.
-	Contains(Value) bool
+	Contains(ctx context.Context, v Value) bool
 
 	// Err returns any error that was encountered by the Iterator.
 	Err() error
@@ -154,9 +166,6 @@ type Iterator interface {
 	// Return a slice of the subiterators for this iterator.
 	SubIterators() []Iterator
 
-	// Return a string representation of the iterator.
-	Describe() Description
-
 	// Close the iterator and do internal cleanup.
 	Close() error
 
@@ -164,15 +173,33 @@ type Iterator interface {
 	UID() uint64
 }
 
+// DescribeIterator returns a description of the iterator tree.
+func DescribeIterator(it Iterator) Description {
+	sz, exact := it.Size()
+	d := Description{
+		UID:  it.UID(),
+		Name: it.String(),
+		Type: it.Type(),
+		Tags: it.Tagger().Tags(),
+		Size: sz, Exact: exact,
+	}
+	if sub := it.SubIterators(); len(sub) != 0 {
+		d.Iterators = make([]Description, 0, len(sub))
+		for _, sit := range sub {
+			d.Iterators = append(d.Iterators, DescribeIterator(sit))
+		}
+	}
+	return d
+}
+
 type Description struct {
-	UID       uint64         `json:",omitempty"`
-	Name      string         `json:",omitempty"`
-	Type      Type           `json:",omitempty"`
-	Tags      []string       `json:",omitempty"`
-	Size      int64          `json:",omitempty"`
-	Direction quad.Direction `json:",omitempty"`
-	Iterator  *Description   `json:",omitempty"`
-	Iterators []Description  `json:",omitempty"`
+	UID       uint64        `json:",omitempty"`
+	Name      string        `json:",omitempty"`
+	Type      Type          `json:",omitempty"`
+	Tags      []string      `json:",omitempty"`
+	Size      int64         `json:",omitempty"`
+	Exact     bool          `json:",omitempty"`
+	Iterators []Description `json:",omitempty"`
 }
 
 // ApplyMorphism is a curried function that can generates a new iterator based on some prior iterator.
@@ -222,97 +249,37 @@ type IteratorStats struct {
 }
 
 // Type enumerates the set of Iterator types.
-type Type int
+type Type string
 
 // These are the iterator types, defined as constants
 const (
-	Invalid Type = iota
-	All
-	And
-	Or
-	HasA
-	LinksTo
-	Comparison
-	Null
-	Fixed
-	Not
-	Optional
-	Materialize
-	Unique
-	Limit
-	Skip
-	Regex
-	Count
+	Invalid     = Type("")
+	All         = Type("all")
+	And         = Type("and")
+	Or          = Type("or")
+	HasA        = Type("hasa")
+	LinksTo     = Type("linksto")
+	Comparison  = Type("comparison")
+	Null        = Type("null")
+	Err         = Type("error")
+	Fixed       = Type("fixed")
+	Not         = Type("not")
+	Optional    = Type("optional")
+	Materialize = Type("materialize")
+	Unique      = Type("unique")
+	Limit       = Type("limit")
+	Skip        = Type("skip")
+	Regex       = Type("regexp")
+	Count       = Type("count")
+	Recursive   = Type("recursive")
 )
-
-var (
-	// We use a sync.Mutex rather than an RWMutex since the client packages keep
-	// the Type that was returned, so the only possibility for contention is at
-	// initialization.
-	lock sync.Mutex
-	// These strings must be kept in order consistent with the Type const block above.
-	types = []string{
-		"invalid",
-		"all",
-		"and",
-		"or",
-		"hasa",
-		"linksto",
-		"comparison",
-		"null",
-		"fixed",
-		"not",
-		"optional",
-		"materialize",
-		"unique",
-		"limit",
-		"skip",
-		"regex",
-		"count",
-	}
-)
-
-// RegisterIterator adds a new iterator type to the set of acceptable types, returning
-// the registered Type.
-// Calls to Register are idempotent and must be made prior to use of the iterator.
-// The conventional approach for use is to include a call to Register in a package
-// init() function, saving the Type to a private package var.
-func RegisterIterator(name string) Type {
-	lock.Lock()
-	defer lock.Unlock()
-	for i, t := range types {
-		if t == name {
-			return Type(i)
-		}
-	}
-	types = append(types, name)
-	return Type(len(types) - 1)
-}
 
 // String returns a string representation of the Type.
 func (t Type) String() string {
-	if t < 0 || int(t) >= len(types) {
+	if t == "" {
 		return "illegal-type"
 	}
-	return types[t]
-}
-
-func (t *Type) MarshalText() (text []byte, err error) {
-	if *t < 0 || int(*t) >= len(types) {
-		return nil, fmt.Errorf("graph: illegal iterator type: %d", *t)
-	}
-	return []byte(types[*t]), nil
-}
-
-func (t *Type) UnmarshalText(text []byte) error {
-	s := string(text)
-	for i, c := range types[1:] {
-		if c == s {
-			*t = Type(i + 1)
-			return nil
-		}
-	}
-	return fmt.Errorf("graph: unknown iterator label: %q", text)
+	return string(t)
 }
 
 type StatsContainer struct {

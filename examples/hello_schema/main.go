@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -9,10 +10,11 @@ import (
 
 	"github.com/cayleygraph/cayley"
 	"github.com/cayleygraph/cayley/graph"
-	_ "github.com/cayleygraph/cayley/graph/bolt"
+	_ "github.com/cayleygraph/cayley/graph/kv/bolt"
 	"github.com/cayleygraph/cayley/quad"
 	"github.com/cayleygraph/cayley/schema"
 	"github.com/cayleygraph/cayley/voc"
+
 	// Import RDF vocabulary definitions to be able to expand IRIs like rdf:label.
 	_ "github.com/cayleygraph/cayley/voc/core"
 )
@@ -76,6 +78,9 @@ func main() {
 	fmt.Printf("saving: %+v\n", bob)
 	id, err := schema.WriteAsQuads(qw, bob)
 	checkErr(err)
+	err = qw.Close()
+	checkErr(err)
+
 	fmt.Println("id for object:", id, "=", bob.ID) // should be equal
 
 	// Get object by id
@@ -97,11 +102,14 @@ func main() {
 		{Lat: 12.3, Lng: 34.5},
 		{Lat: 39.7, Lng: 8.41},
 	}
+	qw = graph.NewWriter(store)
 	for _, c := range coords {
 		id, err = schema.WriteAsQuads(qw, c)
 		checkErr(err)
 		fmt.Println("generated id:", id)
 	}
+	err = qw.Close()
+	checkErr(err)
 
 	// Get coords back
 	var newCoords []Coords
@@ -111,8 +119,9 @@ func main() {
 
 	// Print quads
 	fmt.Println("\nquads:")
+	ctx := context.TODO()
 	it := store.QuadsAllIterator()
-	for it.Next() {
+	for it.Next(ctx) {
 		fmt.Println(store.Quad(it.Result()))
 	}
 }
